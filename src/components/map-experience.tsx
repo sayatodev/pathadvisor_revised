@@ -1,9 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getCampusBootstrap,
+  getBuildingFloors,
   prefetchDefaultFloorDataForBuildings,
   getDirections,
   getFloorData,
@@ -106,6 +107,11 @@ export function MapExperience() {
   const [focusedSegmentId, setFocusedSegmentId] = useState<string | null>(null);
   const [selectionSource, setSelectionSource] = useState<SelectionSource>("search");
   const [floorMenuOpen, setFloorMenuOpen] = useState(false);
+  const [autoVisibleBuildingId, setAutoVisibleBuildingId] = useState<string | null>(null);
+  const [autoVisibleBuildingFloors, setAutoVisibleBuildingFloors] = useState<
+    BuildingFloorSummary[]
+  >([]);
+  const preferredFloorSelectionRef = useRef<string | null>(null);
 
   const debouncedSearchQuery = useDebouncedValue(searchQuery, 220);
   const debouncedRouteQuery = useDebouncedValue(
@@ -141,8 +147,13 @@ export function MapExperience() {
         const detail = await getPlaceDetail(selectedPlace.id);
         setPlaceDetail(detail);
         setSelectedFloorId(
-          detail.floorId ?? detail.defaultFloorId ?? detail.floors[0]?.id ?? null,
+          preferredFloorSelectionRef.current ??
+            detail.floorId ??
+            detail.defaultFloorId ??
+            detail.floors[0]?.id ??
+            null,
         );
+        preferredFloorSelectionRef.current = null;
       } catch (error: unknown) {
         setSearchError(error instanceof Error ? error.message : "Failed to load place detail.");
       } finally {
@@ -152,6 +163,42 @@ export function MapExperience() {
 
     void loadPlace();
   }, [selectedPlace]);
+
+  useEffect(() => {
+    if (!autoVisibleBuildingId || routeMode || selectedPlace) {
+      return;
+    }
+
+    let cancelled = false;
+
+    getBuildingFloors(autoVisibleBuildingId)
+      .then((floors) => {
+        if (!cancelled) {
+          const visibleFloors = floors.filter((floor) => floor.showInPathAdvisor);
+          setAutoVisibleBuildingFloors(visibleFloors);
+          setSelectedFloorId(
+            visibleFloors.find((floor) => floor.isDefault)?.id ??
+              visibleFloors[0]?.id ??
+              null,
+          );
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAutoVisibleBuildingFloors([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [autoVisibleBuildingId, routeMode, selectedPlace]);
+
+  const activeAutoVisibleBuildingFloors = useMemo(
+    () =>
+      !autoVisibleBuildingId || routeMode || selectedPlace ? [] : autoVisibleBuildingFloors,
+    [autoVisibleBuildingFloors, autoVisibleBuildingId, routeMode, selectedPlace],
+  );
 
   useEffect(() => {
     if (!selectedFloorId) {
@@ -257,16 +304,41 @@ export function MapExperience() {
       }));
     }
 
+    if (!selectedPlace && activeAutoVisibleBuildingFloors.length > 0) {
+      return activeAutoVisibleBuildingFloors.map((floor) => ({
+        id: floor.id,
+        label: floorChipLabel(floor),
+      }));
+    }
+
     return (placeDetail?.floors ?? [])
       .filter((floor) => floor.showInPathAdvisor)
       .map((floor) => ({
         id: floor.id,
         label: floorChipLabel(floor),
       }));
-  }, [placeDetail?.floors, routeData, routeMode]);
+  }, [activeAutoVisibleBuildingFloors, placeDetail?.floors, routeData, routeMode, selectedPlace]);
 
   const currentFloorOption =
     floorOptions.find((floor) => floor.id === selectedFloorId) ?? floorOptions[0] ?? null;
+
+  function handleFloorSelect(floorId: string) {
+    setFloorMenuOpen(false);
+
+    if (!routeMode && !selectedPlace && autoVisibleBuildingId && bootstrap) {
+      const buildingPlace =
+        bootstrap.buildings.find((building) => building.id === autoVisibleBuildingId) ?? null;
+
+      if (buildingPlace) {
+        preferredFloorSelectionRef.current = floorId;
+        setSelectedPlace(buildingPlace);
+        setSelectionSource("search");
+        return;
+      }
+    }
+
+    setSelectedFloorId(floorId);
+  }
 
   function selectPlace(place: SearchPlace, source: SelectionSource = "search") {
     setSelectedPlace(place);
@@ -362,12 +434,13 @@ export function MapExperience() {
   const routeSteps = effectiveRouteData?.segments ?? [];
 
   return (
-    <main className="relative h-screen w-screen overflow-hidden bg-slate-950">
+    <main className="relative h-dvh w-full overflow-hidden bg-slate-950">
       <OSMMap
         bootstrap={bootstrap}
         floorData={floorData}
         focusedSegmentId={focusedSegmentId}
         interactionSource={selectionSource}
+        onAutoVisibleBuildingChange={setAutoVisibleBuildingId}
         onSelectBuilding={selectBuildingFromMap}
         onSelectVenue={selectVenueFromMap}
         placeDetail={placeDetail}
@@ -378,16 +451,16 @@ export function MapExperience() {
 
       <div className="pointer-events-none absolute inset-0 z-[500]">
         <header className="px-4 pt-4 sm:px-6 sm:pt-6">
-          <section className="pointer-events-auto w-full max-w-xl rounded-[1.45rem] border border-slate-200/80 bg-white/92 p-3 text-slate-900 shadow-[0_24px_60px_rgba(15,23,42,0.2)] backdrop-blur-xl sm:mr-auto">
+          <section className="pointer-events-auto w-full max-w-lg rounded-[1.3rem] border border-slate-200/80 bg-white/92 px-0 py-1 text-slate-900 shadow-[0_20px_52px_rgba(15,23,42,0.18)] backdrop-blur-xl sm:mr-auto">
             {!routeMode ? (
               <>
-                <div className="flex items-center gap-3 rounded-[1rem] border border-slate-200 bg-white px-4 py-3">
-                  <span className="text-lg text-slate-400">⌕</span>
+                <div className="flex items-center gap-2 rounded-[0.95rem] bg-white px-3 py-2.5">
+                  <span className="text-base text-slate-400">⌕</span>
                   <input
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
-                    placeholder="Search buildings, rooms, halls, and venues"
-                    className="w-full border-0 bg-transparent text-[15px] font-medium outline-none placeholder:text-slate-400"
+                    placeholder="Search buildings or facilities"
+                    className="w-full border-0 bg-transparent text-[14px] font-medium outline-none placeholder:text-slate-400"
                   />
                 </div>
                 {(visibleSearchResults.length > 0 || searchError) && (
@@ -513,47 +586,43 @@ export function MapExperience() {
           </section>
         </header>
 
-        {floorOptions.length > 0 && currentFloorOption ? (
-          <div className="pointer-events-auto absolute bottom-[11.5rem] left-4 sm:bottom-[12.5rem] sm:left-6">
-            <div className="flex flex-col-reverse items-start gap-2">
-              <button
-                type="button"
-                onClick={() => setFloorMenuOpen((open) => !open)}
-                className="inline-flex min-w-16 items-center justify-between gap-3 rounded-[1.15rem] border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-900 shadow-[0_14px_40px_rgba(15,23,42,0.15)]"
-              >
-                <span>{currentFloorOption.label}</span>
-                <span className={`text-xs text-slate-500 transition-transform ${floorMenuOpen ? "rotate-180" : ""}`}>
-                  ▾
-                </span>
-              </button>
-
-              {floorMenuOpen ? (
-                <div className="flex max-h-[42vh] flex-col gap-2 overflow-auto rounded-[1.25rem] border border-slate-200 bg-white p-2 shadow-[0_18px_48px_rgba(15,23,42,0.16)]">
-                  {floorOptions.map((floor) => (
-                    <button
-                      key={floor.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedFloorId(floor.id);
-                        setFloorMenuOpen(false);
-                      }}
-                      className={`rounded-[0.95rem] px-3 py-2 text-left text-sm font-semibold whitespace-nowrap ${
-                        selectedFloorId === floor.id
-                          ? "bg-slate-900 text-white"
-                          : "bg-white text-slate-700 hover:bg-slate-50"
-                      }`}
-                    >
-                      {floor.label}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-
         <section className="pointer-events-auto absolute inset-x-0 bottom-0 z-[550]">
-          <div className="mx-auto w-full max-w-3xl rounded-t-[1.8rem] border border-slate-200 bg-white px-5 pb-6 pt-3 text-slate-900 shadow-[0_-16px_48px_rgba(15,23,42,0.16)]">
+          <div className="relative mx-auto w-full max-w-3xl rounded-t-[1.8rem] border border-slate-200 bg-white px-5 pb-6 pt-3 text-slate-900 shadow-[0_-16px_48px_rgba(15,23,42,0.16)]">
+            {floorOptions.length > 0 && currentFloorOption ? (
+              <div className="pointer-events-auto absolute bottom-full left-4 mb-3 sm:left-6">
+                <div className="flex flex-col-reverse items-start gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFloorMenuOpen((open) => !open)}
+                    className="inline-flex min-w-16 items-center justify-between gap-3 rounded-[1.15rem] border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-900 shadow-[0_14px_40px_rgba(15,23,42,0.15)]"
+                  >
+                    <span>{currentFloorOption.label}</span>
+                    <span className={`text-xs text-slate-500 transition-transform ${floorMenuOpen ? "rotate-180" : ""}`}>
+                      ▾
+                    </span>
+                  </button>
+
+                  {floorMenuOpen ? (
+                    <div className="pathadvisor-hide-scrollbar flex max-h-[42vh] flex-col gap-2 overflow-auto rounded-[1.25rem] border border-slate-200 bg-white p-2 shadow-[0_18px_48px_rgba(15,23,42,0.16)]">
+                      {floorOptions.map((floor) => (
+                        <button
+                          key={floor.id}
+                          type="button"
+                          onClick={() => handleFloorSelect(floor.id)}
+                          className={`rounded-[0.95rem] px-3 py-2 text-left text-sm font-semibold whitespace-nowrap ${
+                            selectedFloorId === floor.id
+                              ? "bg-slate-900 text-white"
+                              : "bg-white text-slate-700 hover:bg-slate-50"
+                          }`}
+                        >
+                          {floor.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-slate-300" />
             {loadingPlace ? (
               <div className="space-y-2">

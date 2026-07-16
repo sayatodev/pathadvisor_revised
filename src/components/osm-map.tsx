@@ -9,7 +9,6 @@ import {
   Marker,
   Polyline,
   TileLayer,
-  Tooltip,
   ZoomControl,
   useMap,
   useMapEvents,
@@ -53,6 +52,7 @@ type OSMMapProps = {
   bootstrap: CampusBootstrap | null;
   floorData: FloorData | null;
   interactionSource: "search" | "map";
+  onAutoVisibleBuildingChange: (buildingId: string | null) => void;
   routeData: RouteData | null;
   selectedFloorId: string | null;
   selectedPlace: SearchPlace | null;
@@ -413,7 +413,7 @@ function labelMinZoom(
   }
 
   if (isPathwayLikeFeature(properties)) {
-    return LABEL_ZOOM_LEVEL_3;
+    return Number.POSITIVE_INFINITY;
   }
 
   if (iconPathForType(properties?.typeName) && normalizedType !== "escalator") {
@@ -552,7 +552,6 @@ function createFacilityIcon({
         <span class="pathadvisor-facility-badge" aria-hidden="true">
           <img src="${iconPath}" alt="" class="pathadvisor-facility-img" style="width:32px;height:32px;display:block;" />
         </span>
-        <span class="pathadvisor-facility-label">${label}</span>
       </div>`,
     iconSize: [0, 0],
     iconAnchor: [0, 0],
@@ -632,11 +631,10 @@ function ViewportController({
   routeData,
   selectedPlace,
   placeDetail,
-  floorData,
   focusedSegmentId,
 }: Pick<
   OSMMapProps,
-  "bootstrap" | "routeData" | "selectedPlace" | "placeDetail" | "floorData" | "focusedSegmentId"
+  "bootstrap" | "routeData" | "selectedPlace" | "placeDetail" | "focusedSegmentId"
 > & {
   disableVenueFocus: boolean;
 }) {
@@ -679,17 +677,9 @@ function ViewportController({
         return;
       }
     }
-
-    if (floorData?.bounds && !placeDetail?.coordinates) {
-      map.fitBounds(floorData.bounds, {
-        padding: [84, 84],
-        maxZoom: 20,
-      });
-    }
   }, [
     bootstrap,
     disableVenueFocus,
-    floorData,
     focusedSegmentId,
     map,
     placeDetail,
@@ -775,21 +765,13 @@ function FloorLayer({
       }}
       onEachFeature={(feature, layer) => {
         const properties = feature.properties as FloorFeatureProperties | undefined;
-        const label = properties?.name?.trim() || properties?.typeName?.trim();
-
-        if (label) {
-          layer.bindTooltip(label, {
-            direction: "top",
-            opacity: 0.94,
-            sticky: true,
-          });
-        }
-
         const isClickable = isClickableFloorFeature(properties);
         const isPathwayLike = isPathwayLikeFeature(properties);
 
         if (isClickable) {
           layer.on("click", () => {
+            layer.closeTooltip?.();
+            layer.unbindTooltip?.();
             if (properties?.locationId) {
               onSelectVenue({
                 id: properties.locationId,
@@ -839,6 +821,7 @@ export function OSMMap({
   bootstrap,
   floorData,
   interactionSource,
+  onAutoVisibleBuildingChange,
   routeData,
   selectedFloorId,
   selectedPlace,
@@ -864,6 +847,10 @@ export function OSMMap({
   const disableVenueFocusEffects =
     interactionSource === "map" &&
     (selectedPlace?.kind === "location" || selectedPlace?.kind === "point_of_interest");
+  const activeBuildingId =
+    selectedPlace?.kind === "building"
+      ? selectedPlace.id
+      : selectedPlace?.buildingId ?? placeDetail?.buildingId ?? null;
 
   const visibleSegments = useMemo(
     () =>
@@ -907,6 +894,17 @@ export function OSMMap({
       })
       .slice(0, MAX_AUTO_BUILDINGS);
   }, [buildingBounds, viewportBounds, zoomLevel]);
+
+  useEffect(() => {
+    if (zoomLevel < AUTO_FLOOR_MIN_ZOOM) {
+      onAutoVisibleBuildingChange(null);
+      return;
+    }
+
+    onAutoVisibleBuildingChange(
+      visibleAutoBuildings.length === 1 ? visibleAutoBuildings[0].buildingId : null,
+    );
+  }, [onAutoVisibleBuildingChange, visibleAutoBuildings, zoomLevel]);
 
   useEffect(() => {
     if (zoomLevel < AUTO_FLOOR_MIN_ZOOM || visibleAutoBuildings.length === 0) {
@@ -963,10 +961,11 @@ export function OSMMap({
 
       return Object.entries(autoFloorDataByBuilding)
         .filter(([buildingId]) => visibleBuildingIds.has(buildingId))
+        .filter(([buildingId]) => buildingId !== activeBuildingId)
         .map(([, autoFloor]) => autoFloor)
         .filter((autoFloor) => autoFloor.id !== floorData?.id);
     },
-    [autoFloorDataByBuilding, floorData?.id, visibleAutoBuildings, zoomLevel],
+    [activeBuildingId, autoFloorDataByBuilding, floorData?.id, visibleAutoBuildings, zoomLevel],
   );
 
   const liftFeatures = useMemo(
@@ -1212,11 +1211,6 @@ export function OSMMap({
               layer.on("click", () => {
                 onSelectBuilding(feature.properties.buildingId, feature.properties.name);
               });
-
-              layer.bindTooltip(feature.properties.name, {
-                direction: "top",
-                opacity: 1,
-              });
             }}
           />
         ) : null}
@@ -1251,13 +1245,7 @@ export function OSMMap({
               key={`lift-${group.label}-${group.center[0]}-${group.center[1]}`}
               position={group.center}
               icon={createLiftIcon(group.label)}
-            >
-              <Tooltip direction="top" offset={[0, -8]} opacity={0.96}>
-                <div className="text-[11px] font-medium text-slate-700">
-                  {group.names.join(", ")}
-                </div>
-              </Tooltip>
-            </Marker>
+            />
           );
         })}
 
@@ -1307,23 +1295,12 @@ export function OSMMap({
               fillOpacity: 1,
               weight: 3,
             }}
-          >
-            <Tooltip direction="top" offset={[0, -12]} opacity={1}>
-              <div className="min-w-40">
-                <p className="font-semibold">{placeDetail.name}</p>
-                <p className="text-xs opacity-75">
-                  {placeDetail.buildingName}
-                  {placeDetail.floorName ? ` • ${placeDetail.floorName}` : ""}
-                </p>
-              </div>
-            </Tooltip>
-          </CircleMarker>
+          />
         ) : null}
 
         <ViewportController
           bootstrap={bootstrap}
           disableVenueFocus={disableVenueFocusEffects}
-          floorData={floorData}
           focusedSegmentId={focusedSegmentId}
           placeDetail={placeDetail}
           routeData={routeData}
