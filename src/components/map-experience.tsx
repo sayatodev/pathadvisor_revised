@@ -6,6 +6,7 @@ import {
   getCampusBootstrap,
   getBuildingFloors,
   prefetchDefaultFloorDataForBuildings,
+  prefetchFloorDataForBuilding,
   getDirections,
   getFloorData,
   getPlaceDetail,
@@ -199,6 +200,32 @@ export function MapExperience() {
       !autoVisibleBuildingId || routeMode || selectedPlace ? [] : autoVisibleBuildingFloors,
     [autoVisibleBuildingFloors, autoVisibleBuildingId, routeMode, selectedPlace],
   );
+
+  const focusedBuildingId = useMemo(() => {
+    if (routeMode) {
+      return null;
+    }
+
+    if (selectedPlace) {
+      return placeDetail?.buildingId ?? null;
+    }
+
+    return activeAutoVisibleBuildingFloors.length > 0 ? autoVisibleBuildingId : null;
+  }, [
+    activeAutoVisibleBuildingFloors.length,
+    autoVisibleBuildingId,
+    placeDetail?.buildingId,
+    routeMode,
+    selectedPlace,
+  ]);
+
+  useEffect(() => {
+    if (!focusedBuildingId) {
+      return;
+    }
+
+    void prefetchFloorDataForBuilding(focusedBuildingId);
+  }, [focusedBuildingId]);
 
   useEffect(() => {
     if (!selectedFloorId) {
@@ -440,6 +467,7 @@ export function MapExperience() {
         floorData={floorData}
         focusedSegmentId={focusedSegmentId}
         interactionSource={selectionSource}
+        isFloorSelectorVisible={floorOptions.length > 0 && Boolean(currentFloorOption)}
         onAutoVisibleBuildingChange={setAutoVisibleBuildingId}
         onSelectBuilding={selectBuildingFromMap}
         onSelectVenue={selectVenueFromMap}

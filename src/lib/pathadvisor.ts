@@ -209,7 +209,7 @@ type DirectionsResponse = {
           info?: string;
         };
         geometry: {
-          coordinates: string[];
+          coordinates: Array<[number, number] | string>;
         };
       }>;
     };
@@ -255,6 +255,64 @@ const floorNavNodeSummaryCache = new Map<
 >();
 const buildingFloorsCache = new Map<string, Promise<BuildingFloorSummary[]>>();
 const floorDataCache = new Map<string, Promise<FloorData>>();
+const FLOOR_PLAN_CACHE_PREFIX = "pathadvisor:floor-plan:v1:";
+const FLOOR_PLAN_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+type PersistedFloorPlan = {
+  expiresAt: number;
+  floorData: FloorData;
+};
+
+function readPersistedFloorPlan(buildingFloorId: string) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const cacheKey = `${FLOOR_PLAN_CACHE_PREFIX}${buildingFloorId}`;
+    const storedValue = window.localStorage.getItem(cacheKey);
+
+    if (!storedValue) {
+      return null;
+    }
+
+    const cached = JSON.parse(storedValue) as PersistedFloorPlan;
+
+    if (
+      typeof cached.expiresAt !== "number" ||
+      cached.expiresAt <= Date.now() ||
+      !cached.floorData ||
+      cached.floorData.id !== buildingFloorId
+    ) {
+      window.localStorage.removeItem(cacheKey);
+      return null;
+    }
+
+    return cached.floorData;
+  } catch {
+    return null;
+  }
+}
+
+function persistFloorPlan(buildingFloorId: string, floorData: FloorData) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    const cached: PersistedFloorPlan = {
+      expiresAt: Date.now() + FLOOR_PLAN_CACHE_TTL_MS,
+      floorData,
+    };
+
+    window.localStorage.setItem(
+      `${FLOOR_PLAN_CACHE_PREFIX}${buildingFloorId}`,
+      JSON.stringify(cached),
+    );
+  } catch {
+    // Storage can be unavailable or full; the in-memory cache still serves this session.
+  }
+}
 
 async function mapWithConcurrency<T, R>(
   values: T[],
@@ -491,15 +549,29 @@ export async function prefetchDefaultFloorDataForBuildings(buildingIds: string[]
   });
 }
 
+export async function prefetchFloorDataForBuilding(buildingId: string) {
+  const floors = await getBuildingFloors(buildingId);
+
+  await mapWithConcurrency(floors, 4, async (floor) => {
+    try {
+      await getFloorData(floor.id, { persistForOneDay: true });
+      return floor.id;
+    } catch {
+      return null;
+    }
+  });
+}
+
 function normalizeSegment(
   path: DirectionsResponse["data"]["directions"]["paths"][number],
   index: number,
 ): RouteSegment {
   const coordinates = (path.geometry.coordinates ?? [])
     .map((coordinate) => {
-      const [lngString, latString] = coordinate.split(" ");
-      const lng = Number.parseFloat(lngString);
-      const lat = Number.parseFloat(latString);
+      const [lngValue, latValue] =
+        typeof coordinate === "string" ? coordinate.trim().split(/\s+/) : coordinate;
+      const lng = parseNumber(lngValue);
+      const lat = parseNumber(latValue);
       return Number.isFinite(lat) && Number.isFinite(lng)
         ? ([lat, lng] as [number, number])
         : null;
@@ -623,11 +695,18 @@ export async function getPlaceDetail(id: string): Promise<PlaceDetail> {
   };
 }
 
-export async function getFloorData(buildingFloorId: string): Promise<FloorData> {
+export async function getFloorData(
+  buildingFloorId: string,
+  options: { persistForOneDay?: boolean } = {},
+): Promise<FloorData> {
   let cached = floorDataCache.get(buildingFloorId);
 
   if (!cached) {
-    cached = (async () => {
+    const persistedFloorPlan = readPersistedFloorPlan(buildingFloorId);
+
+    cached = persistedFloorPlan
+      ? Promise.resolve(persistedFloorPlan)
+      : (async () => {
       const response = await fetchPathAdvisor<FloorGeoJsonResponse>("/building-floors/geojson", {
         building_floor_id: buildingFloorId,
       });
@@ -692,14 +771,20 @@ export async function getFloorData(buildingFloorId: string): Promise<FloorData> 
         features,
       };
     })().catch((error) => {
-      floorDataCache.delete(buildingFloorId);
-      throw error;
-    });
+        floorDataCache.delete(buildingFloorId);
+        throw error;
+      });
 
     floorDataCache.set(buildingFloorId, cached);
   }
 
-  return cached;
+  const floorData = await cached;
+
+  if (options.persistForOneDay) {
+    persistFloorPlan(buildingFloorId, floorData);
+  }
+
+  return floorData;
 }
 
 export async function getDirections(params: {

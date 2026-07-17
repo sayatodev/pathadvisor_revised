@@ -28,6 +28,7 @@ const MAX_AUTO_BUILDINGS = 6;
 const LABEL_ZOOM_LEVEL_2 = 18.2;
 const LABEL_ZOOM_LEVEL_3 = 19.1;
 const LABEL_COLLISION_FREE_ZOOM = 20;
+const BUILDING_FLOOR_FOCUS_ZOOM = 18.8;
 const FLOOR_TYPE_ICON_PATHS: Partial<Record<string, string>> = {
   "Lift Shaft": "/floor-icons/elevator.png",
   Escalator: "/floor-icons/escalator.png",
@@ -52,6 +53,7 @@ type MapBoundsTuple = [[number, number], [number, number]];
 type OSMMapProps = {
   bootstrap: CampusBootstrap | null;
   floorData: FloorData | null;
+  isFloorSelectorVisible: boolean;
   interactionSource: "search" | "map";
   onAutoVisibleBuildingChange: (buildingId: string | null) => void;
   routeData: RouteData | null;
@@ -548,9 +550,12 @@ function iconPathForType(typeName: string | undefined) {
   return typeName ? FLOOR_TYPE_ICON_PATHS[typeName] ?? null : null;
 }
 
-function createLiftIcon(label: string) {
+function createLiftIcon(label: string, showLabel: boolean) {
   const visibleLabel = label === "↕" ? "Lift" : `Lift ${label}`;
   const iconPath = FLOOR_TYPE_ICON_PATHS["Lift Shaft"];
+  const labelMarkup = showLabel
+    ? `<span class="pathadvisor-lift-label" style="color:#a5c3f2;">${visibleLabel}</span>`
+    : "";
 
   return L.divIcon({
     className: "pathadvisor-lift-icon",
@@ -559,7 +564,7 @@ function createLiftIcon(label: string) {
         <span class="pathadvisor-lift-badge" aria-hidden="true">
           <img src="${iconPath}" alt="" class="pathadvisor-facility-img" style="width:22px;height:22px;display:block;" />
         </span>
-        <span class="pathadvisor-lift-label" style="color:#a5c3f2;">${visibleLabel}</span>
+        ${labelMarkup}
       </div>`,
     iconSize: [0, 0],
     iconAnchor: [0, 0],
@@ -706,12 +711,15 @@ function ViewportController({
       if (footprint) {
         const bounds = featureBounds(footprint);
         const padding = L.point(84, 84);
-        const targetZoom = Math.min(map.getBoundsZoom(bounds, false, padding), 18.8);
+        const targetZoom = Math.min(
+          map.getBoundsZoom(bounds, false, padding),
+          BUILDING_FLOOR_FOCUS_ZOOM,
+        );
 
         if (targetZoom > map.getZoom()) {
           map.fitBounds(bounds, {
             padding: [84, 84],
-            maxZoom: 18.8,
+            maxZoom: BUILDING_FLOOR_FOCUS_ZOOM,
           });
         } else {
           map.panTo(bounds.getCenter(), { animate: true });
@@ -771,13 +779,118 @@ function ViewportWatcher({
   return null;
 }
 
+function TouchGestureModeController() {
+  const map = useMap();
+
+  useEffect(() => {
+    const container = map.getContainer();
+    let startAngle = 0;
+    let startDistance = 0;
+    let gestureMode: "rotate" | "zoom" | null = null;
+
+    const resetGesture = () => {
+      gestureMode = null;
+    };
+
+    const selectGestureMode = (event: TouchEvent) => {
+      if (event.touches.length !== 2) {
+        return;
+      }
+
+      const [firstTouch, secondTouch] = event.touches;
+      const deltaX = firstTouch.clientX - secondTouch.clientX;
+      const deltaY = firstTouch.clientY - secondTouch.clientY;
+      const distance = Math.hypot(deltaX, deltaY);
+
+      const touchGestures = map as L.Map & {
+        touchGestures?: {
+          _rotating: boolean;
+          _startDist: number;
+          _startZoom: number;
+          _zooming: boolean;
+        };
+      };
+
+      if (gestureMode === "rotate" && touchGestures.touchGestures) {
+        // The plugin's rotation handler still needs its zoom frame to update the map.
+        // Resetting the pinch baseline keeps that frame at scale 1 while rotating.
+        touchGestures.touchGestures._rotating = true;
+        touchGestures.touchGestures._zooming = true;
+        touchGestures.touchGestures._startDist = distance;
+        touchGestures.touchGestures._startZoom = map.getZoom();
+        return;
+      }
+
+      if (gestureMode) {
+        return;
+      }
+
+      if (distance === 0 || startDistance === 0) {
+        return;
+      }
+
+      const angle = Math.atan2(deltaY, deltaX);
+      const angleDelta = Math.atan2(
+        Math.sin(angle - startAngle),
+        Math.cos(angle - startAngle),
+      );
+      const rotationDelta = Math.abs((angleDelta * 180) / Math.PI);
+      const zoomDelta = Math.abs((Math.log(distance / startDistance) * 180) / Math.PI);
+
+      if (rotationDelta < 4 && zoomDelta < 4) {
+        return;
+      }
+
+      gestureMode = rotationDelta > zoomDelta ? "rotate" : "zoom";
+
+      if (touchGestures.touchGestures) {
+        touchGestures.touchGestures._rotating = gestureMode === "rotate";
+        touchGestures.touchGestures._zooming = true;
+        if (gestureMode === "rotate") {
+          touchGestures.touchGestures._startDist = distance;
+          touchGestures.touchGestures._startZoom = map.getZoom();
+        }
+      }
+    };
+
+    const beginGesture = (event: TouchEvent) => {
+      if (event.touches.length !== 2) {
+        return;
+      }
+
+      const [firstTouch, secondTouch] = event.touches;
+      const deltaX = firstTouch.clientX - secondTouch.clientX;
+      const deltaY = firstTouch.clientY - secondTouch.clientY;
+      startAngle = Math.atan2(deltaY, deltaX);
+      startDistance = Math.hypot(deltaX, deltaY);
+      gestureMode = null;
+    };
+
+    container.addEventListener("touchstart", beginGesture, { capture: true, passive: true });
+    container.addEventListener("touchmove", selectGestureMode, { capture: true, passive: true });
+    container.addEventListener("touchend", resetGesture, { capture: true, passive: true });
+    container.addEventListener("touchcancel", resetGesture, { capture: true, passive: true });
+
+    return () => {
+      container.removeEventListener("touchstart", beginGesture, true);
+      container.removeEventListener("touchmove", selectGestureMode, true);
+      container.removeEventListener("touchend", resetGesture, true);
+      container.removeEventListener("touchcancel", resetGesture, true);
+    };
+  }, [map]);
+
+  return null;
+}
+
 function FloorLayer({
   floorData,
+  opacity = 1,
   selectedLocationId,
   selectedPointOfInterestId,
   onSelectVenue,
 }: {
   floorData: FloorData;
+  opacity?: number;
   selectedLocationId?: string;
   selectedPointOfInterestId?: string;
   onSelectVenue: OSMMapProps["onSelectVenue"];
@@ -789,6 +902,24 @@ function FloorLayer({
     (Boolean(selectedPointOfInterestId) &&
       properties?.pointOfInterestId === selectedPointOfInterestId);
 
+  const styleForFeature = (
+    properties: FloorFeatureProperties | undefined,
+    isSelected: boolean,
+  ) => {
+    const style = floorStyle({
+      isClickable: isClickableFloorFeature(properties),
+      isPathwayLike: isPathwayLikeFeature(properties),
+      isSelected,
+      colorHex: properties?.colorHex,
+    });
+
+    return {
+      ...style,
+      opacity,
+      fillOpacity: style.fillOpacity * opacity,
+    };
+  };
+
   return (
     <GeoJSON
       key={`floor-${floorData.id}`}
@@ -796,15 +927,8 @@ function FloorLayer({
       style={(feature) => {
         const properties = feature?.properties as FloorFeatureProperties | undefined;
         const isSelected = isFeatureSelected(properties);
-        const isClickable = isClickableFloorFeature(properties);
-        const isPathwayLike = isPathwayLikeFeature(properties);
 
-        return floorStyle({
-          isClickable,
-          isPathwayLike,
-          isSelected,
-          colorHex: properties?.colorHex,
-        });
+        return styleForFeature(properties, isSelected);
       }}
       onEachFeature={(feature, layer) => {
         const properties = feature.properties as FloorFeatureProperties | undefined;
@@ -841,18 +965,14 @@ function FloorLayer({
         (layer as L.Path).setStyle({
           color: "#475569",
           weight: 1,
-          fillOpacity: 1,
+          opacity,
+          fillOpacity: opacity,
         });
       });
 
         layer.on("mouseout", () => {
           (layer as L.Path).setStyle(
-            floorStyle({
-              isClickable,
-              isPathwayLike,
-              isSelected: isFeatureSelected(properties),
-              colorHex: properties?.colorHex,
-            }),
+            styleForFeature(properties, isFeatureSelected(properties)),
           );
         });
       }}
@@ -897,6 +1017,7 @@ export function OSMMap(props: OSMMapProps) {
 function RotatableOSMMap({
   bootstrap,
   floorData,
+  isFloorSelectorVisible,
   interactionSource,
   onAutoVisibleBuildingChange,
   routeData,
@@ -1277,6 +1398,7 @@ function RotatableOSMMap({
           onZoomChange={setZoomLevel}
           onBoundsChange={setViewportBounds}
         />
+        {rotationEnabled ? <TouchGestureModeController /> : null}
 
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -1327,6 +1449,7 @@ function RotatableOSMMap({
           <FloorLayer
             key={`auto-floor-${autoFloor.id}`}
             floorData={autoFloor}
+            opacity={isFloorSelectorVisible ? 0.6 : 1}
             selectedLocationId={disableVenueFocusEffects ? undefined : selectedLocationId}
             selectedPointOfInterestId={
               disableVenueFocusEffects ? undefined : selectedPointOfInterestId
@@ -1352,7 +1475,7 @@ function RotatableOSMMap({
             <Marker
               key={`lift-${group.label}-${group.center[0]}-${group.center[1]}`}
               position={group.center}
-              icon={createLiftIcon(group.label)}
+              icon={createLiftIcon(group.label, zoomLevel >= BUILDING_FLOOR_FOCUS_ZOOM)}
             />
           );
         })}
