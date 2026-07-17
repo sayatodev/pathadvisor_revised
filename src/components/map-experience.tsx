@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getCampusBootstrap,
@@ -113,6 +114,7 @@ export function MapExperience() {
     BuildingFloorSummary[]
   >([]);
   const preferredFloorSelectionRef = useRef<string | null>(null);
+  const routeInputRefs = useRef<Partial<Record<"start" | "end", HTMLInputElement | null>>>({});
 
   const debouncedSearchQuery = useDebouncedValue(searchQuery, 220);
   const debouncedRouteQuery = useDebouncedValue(
@@ -524,45 +526,96 @@ export function MapExperience() {
               </>
             ) : (
               <>
-                <div className="space-y-2">
-                  {(["start", "end"] as const).map((field) => (
-                    <div
-                      key={field}
-                      className={`flex items-center gap-3 rounded-[1rem] border px-4 py-3 ${
-                        activeRouteField === field
-                          ? "border-sky-300 bg-sky-50"
-                          : "border-slate-200 bg-white"
-                      }`}
-                    >
-                      <span className="text-sm font-semibold text-slate-400">
-                        {field === "start" ? "A" : "B"}
-                      </span>
-                      <input
-                        value={routeInputs[field]}
-                        onFocus={() => setActiveRouteField(field)}
-                        onChange={(event) => {
-                          setRouteData(null);
-                          setRouteError(null);
-                          setRouteDraft((current) => ({
-                            ...current,
-                            [field]: null,
-                          }));
-                          setRouteInputs((current) => ({
-                            ...current,
-                            [field]: event.target.value,
-                          }));
-                        }}
-                        placeholder={field === "start" ? "Starting point" : "Destination"}
-                        className="w-full border-0 bg-transparent text-[15px] font-medium outline-none placeholder:text-slate-400"
-                      />
-                    </div>
-                  ))}
-                </div>
+                <div className="flex items-stretch px-1 py-1">
+                  <button
+                    type="button"
+                    onClick={resetDirections}
+                    aria-label="Close directions"
+                    className="mr-2 flex w-10 shrink-0 items-center justify-center rounded-2xl text-slate-600 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+                  >
+                    <Image src="/buttons/arrow-back.png" alt="" width={20} height={20} />
+                  </button>
 
-                <div className="mt-3 flex items-center justify-between gap-3">
+                  <div className="relative min-w-0 flex-1 py-0.5">
+                    <span className="absolute bottom-1/2 left-[5px] top-1/2 w-px bg-slate-200" />
+                    {(["start", "end"] as const).map((field, index) => {
+                      const routePlace = routeDraft[field];
+                      const placeholder = field === "start" ? "Starting point" : "Destination";
+
+                      return (
+                        <div
+                          key={field}
+                          className={`relative flex h-9 min-w-0 items-center gap-0 pl-6 pr-1 ${
+                            index === 0 ? "border-b border-slate-300" : ""
+                          }`}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`absolute left-0 h-2.5 w-2.5 rounded-full ring-2 ring-white ${
+                              field === "start" ? "bg-sky-400" : "bg-emerald-400"
+                            }`}
+                          />
+                          <input
+                            ref={(input) => {
+                              routeInputRefs.current[field] = input;
+                            }}
+                            value={routeInputs[field]}
+                            style={
+                              routePlace
+                                ? { width: `${Math.max(routeInputs[field].length, 1)}ch` }
+                                : undefined
+                            }
+                            onFocus={() => setActiveRouteField(field)}
+                            onChange={(event) => {
+                              setRouteData(null);
+                              setRouteError(null);
+                              setRouteDraft((current) => ({
+                                ...current,
+                                [field]: null,
+                              }));
+                              setRouteInputs((current) => ({
+                                ...current,
+                                [field]: event.target.value,
+                              }));
+                            }}
+                            placeholder={placeholder}
+                            aria-label={placeholder}
+                            className={`min-w-0 max-w-[64%] border-0 bg-transparent text-[15px] font-medium text-slate-900 outline-none placeholder:text-slate-400 ${
+                              routePlace ? "flex-none" : "flex-1"
+                            }`}
+                          />
+                          {routePlace?.subtitle ? (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => {
+                                setActiveRouteField(field);
+                                routeInputRefs.current[field]?.focus();
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== "Enter" && event.key !== " ") {
+                                  return;
+                                }
+
+                                event.preventDefault();
+                                setActiveRouteField(field);
+                                routeInputRefs.current[field]?.focus();
+                              }}
+                              className="min-w-0 shrink cursor-text truncate text-[15px] text-slate-400 outline-none focus-visible:text-slate-600"
+                            >
+                              {" "}{routePlace.subtitle}
+                            </span>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+
                   <button
                     type="button"
                     onClick={() => {
+                      setRouteData(null);
+                      setRouteError(null);
                       setRouteDraft((current) => ({
                         start: current.end,
                         end: current.start,
@@ -572,16 +625,10 @@ export function MapExperience() {
                         end: current.start,
                       }));
                     }}
-                    className="rounded-full border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700"
+                    aria-label="Swap start and destination"
+                    className="ml-2 flex w-10 shrink-0 items-center justify-center rounded-2xl text-slate-600 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
                   >
-                    Swap
-                  </button>
-                  <button
-                    type="button"
-                    onClick={resetDirections}
-                    className="rounded-full border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
-                  >
-                    Close
+                    <Image src="/buttons/swap-vertical.png" alt="" width={20} height={20} />
                   </button>
                 </div>
 

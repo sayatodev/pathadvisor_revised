@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import {
   CircleMarker,
@@ -29,6 +29,7 @@ const LABEL_ZOOM_LEVEL_2 = 18.2;
 const LABEL_ZOOM_LEVEL_3 = 19.1;
 const LABEL_COLLISION_FREE_ZOOM = 20;
 const BUILDING_FLOOR_FOCUS_ZOOM = 18.8;
+const LIFT_MARKER_MIN_ZOOM = 17.5;
 const FLOOR_TYPE_ICON_PATHS: Partial<Record<string, string>> = {
   "Lift Shaft": "/floor-icons/elevator.png",
   Escalator: "/floor-icons/escalator.png",
@@ -550,12 +551,9 @@ function iconPathForType(typeName: string | undefined) {
   return typeName ? FLOOR_TYPE_ICON_PATHS[typeName] ?? null : null;
 }
 
-function createLiftIcon(label: string, showLabel: boolean) {
+function createLiftIcon(label: string) {
   const visibleLabel = label === "↕" ? "Lift" : `Lift ${label}`;
   const iconPath = FLOOR_TYPE_ICON_PATHS["Lift Shaft"];
-  const labelMarkup = showLabel
-    ? `<span class="pathadvisor-lift-label" style="color:#a5c3f2;">${visibleLabel}</span>`
-    : "";
 
   return L.divIcon({
     className: "pathadvisor-lift-icon",
@@ -564,7 +562,7 @@ function createLiftIcon(label: string, showLabel: boolean) {
         <span class="pathadvisor-lift-badge" aria-hidden="true">
           <img src="${iconPath}" alt="" class="pathadvisor-facility-img" style="width:22px;height:22px;display:block;" />
         </span>
-        ${labelMarkup}
+        <span class="pathadvisor-lift-label" style="color:#a5c3f2;">${visibleLabel}</span>
       </div>`,
     iconSize: [0, 0],
     iconAnchor: [0, 0],
@@ -742,39 +740,51 @@ function ViewportController({
 }
 
 function ViewportWatcher({
+  debugEnabled,
   onZoomChange,
   onBoundsChange,
 }: {
+  debugEnabled: boolean;
   onZoomChange: (zoom: number) => void;
   onBoundsChange: (bounds: MapBoundsTuple) => void;
 }) {
+  const lastLoggedZoomRef = useRef<number | null>(null);
   const map = useMapEvents({
-    zoomend: () => {
-      const bounds = map.getBounds();
-      onZoomChange(map.getZoom());
-      onBoundsChange([
-        [bounds.getSouth(), bounds.getWest()],
-        [bounds.getNorth(), bounds.getEast()],
-      ]);
-    },
-    moveend: () => {
-      const bounds = map.getBounds();
-      onZoomChange(map.getZoom());
-      onBoundsChange([
-        [bounds.getSouth(), bounds.getWest()],
-        [bounds.getNorth(), bounds.getEast()],
-      ]);
-    },
+    zoomend: reportViewport,
+    moveend: reportViewport,
   });
 
-  useEffect(() => {
+  function reportViewport() {
+    const zoom = map.getZoom();
     const bounds = map.getBounds();
-    onZoomChange(map.getZoom());
+
+    if (debugEnabled && lastLoggedZoomRef.current !== zoom) {
+      console.info("[PathAdvisor debug] zoom level", zoom);
+      lastLoggedZoomRef.current = zoom;
+    }
+
+    onZoomChange(zoom);
     onBoundsChange([
       [bounds.getSouth(), bounds.getWest()],
       [bounds.getNorth(), bounds.getEast()],
     ]);
-  }, [map, onBoundsChange, onZoomChange]);
+  }
+
+  useEffect(() => {
+    const zoom = map.getZoom();
+    const bounds = map.getBounds();
+
+    if (debugEnabled && lastLoggedZoomRef.current !== zoom) {
+      console.info("[PathAdvisor debug] zoom level", zoom);
+      lastLoggedZoomRef.current = zoom;
+    }
+
+    onZoomChange(zoom);
+    onBoundsChange([
+      [bounds.getSouth(), bounds.getWest()],
+      [bounds.getNorth(), bounds.getEast()],
+    ]);
+  }, [debugEnabled, map, onBoundsChange, onZoomChange]);
 
   return null;
 }
@@ -981,6 +991,8 @@ function FloorLayer({
 }
 
 export function OSMMap(props: OSMMapProps) {
+  const debugEnabled =
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("_debug") === "1";
   const [rotationReady, setRotationReady] = useState(false);
   const [rotationEnabled, setRotationEnabled] = useState(false);
 
@@ -1011,7 +1023,13 @@ export function OSMMap(props: OSMMapProps) {
     return <div className="absolute inset-0 bg-[#d6e7f5]" />;
   }
 
-  return <RotatableOSMMap {...props} rotationEnabled={rotationEnabled} />;
+  return (
+    <RotatableOSMMap
+      {...props}
+      debugEnabled={debugEnabled}
+      rotationEnabled={rotationEnabled}
+    />
+  );
 }
 
 function RotatableOSMMap({
@@ -1027,8 +1045,9 @@ function RotatableOSMMap({
   focusedSegmentId,
   onSelectBuilding,
   onSelectVenue,
+  debugEnabled,
   rotationEnabled,
-}: OSMMapProps & { rotationEnabled: boolean }) {
+}: OSMMapProps & { debugEnabled: boolean; rotationEnabled: boolean }) {
   const [zoomLevel, setZoomLevel] = useState(16);
   const [viewportBounds, setViewportBounds] = useState<MapBoundsTuple | null>(null);
   const [autoFloorDataByBuilding, setAutoFloorDataByBuilding] = useState<
@@ -1395,6 +1414,7 @@ function RotatableOSMMap({
       >
         <ZoomControl position="bottomright" />
         <ViewportWatcher
+          debugEnabled={debugEnabled}
           onZoomChange={setZoomLevel}
           onBoundsChange={setViewportBounds}
         />
@@ -1470,15 +1490,15 @@ function RotatableOSMMap({
           />
         ) : null}
 
-        {mergedLiftGroups.map((group) => {
-          return (
-            <Marker
-              key={`lift-${group.label}-${group.center[0]}-${group.center[1]}`}
-              position={group.center}
-              icon={createLiftIcon(group.label, zoomLevel >= BUILDING_FLOOR_FOCUS_ZOOM)}
-            />
-          );
-        })}
+        {zoomLevel >= LIFT_MARKER_MIN_ZOOM
+          ? mergedLiftGroups.map((group) => (
+              <Marker
+                key={`lift-${group.label}-${group.center[0]}-${group.center[1]}`}
+                position={group.center}
+                icon={createLiftIcon(group.label)}
+              />
+            ))
+          : null}
 
         {visibleFacilityIcons.map((feature) => (
           <Marker
