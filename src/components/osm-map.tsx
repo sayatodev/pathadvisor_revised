@@ -827,96 +827,32 @@ function ViewportWatcher({
   return null;
 }
 
-function TouchGestureModeController() {
+const ROTATION_START_DEGREES = 6;
+const ROTATION_TO_ZOOM_SCALE_DELTA = 0.12;
+const ZOOM_START_SCALE_DELTA = 0.04;
+
+function TouchGestureIntentController() {
   const map = useMap();
 
   useEffect(() => {
     const container = map.getContainer();
     let startAngle = 0;
     let startDistance = 0;
-    let startMidpoint: [number, number] = [0, 0];
-    let gestureMode: "rotate" | "zoom" | null = null;
+    let rotationStartDistance = 0;
+    let gestureIntent: "rotate" | "zoom" | null = null;
 
-    const resetGesture = () => {
-      gestureMode = null;
+    const touchGestures = map as L.Map & {
+      touchGestures?: {
+        _rotating: boolean;
+        _startDist: number;
+        _startZoom: number;
+        _zooming: boolean;
+      };
     };
 
-    const selectGestureMode = (event: TouchEvent) => {
-      if (event.touches.length !== 2) {
-        return;
-      }
-
-      const [firstTouch, secondTouch] = event.touches;
-      const deltaX = firstTouch.clientX - secondTouch.clientX;
-      const deltaY = firstTouch.clientY - secondTouch.clientY;
-      const distance = Math.hypot(deltaX, deltaY);
-      const midpoint: [number, number] = [
-        (firstTouch.clientX + secondTouch.clientX) / 2,
-        (firstTouch.clientY + secondTouch.clientY) / 2,
-      ];
-      const translationDelta = Math.hypot(
-        midpoint[0] - startMidpoint[0],
-        midpoint[1] - startMidpoint[1],
-      );
-
-      const touchGestures = map as L.Map & {
-        touchGestures?: {
-          _rotating: boolean;
-          _startDist: number;
-          _startZoom: number;
-          _zooming: boolean;
-        };
-      };
-
-      if (gestureMode === "rotate" && translationDelta >= 12 && touchGestures.touchGestures) {
-        // Pinch midpoint movement takes precedence over rotation because the plugin
-        // cannot keep vector overlays aligned during a simultaneous pan and rotate.
-        gestureMode = "zoom";
-        touchGestures.touchGestures._rotating = false;
-        touchGestures.touchGestures._zooming = true;
-      }
-
-      if (gestureMode === "rotate" && touchGestures.touchGestures) {
-        // The plugin's rotation handler still needs its zoom frame to update the map.
-        // Resetting the pinch baseline keeps that frame at scale 1 while rotating.
-        touchGestures.touchGestures._rotating = true;
-        touchGestures.touchGestures._zooming = true;
-        touchGestures.touchGestures._startDist = distance;
-        touchGestures.touchGestures._startZoom = map.getZoom();
-        return;
-      }
-
-      if (gestureMode) {
-        return;
-      }
-
-      if (distance === 0 || startDistance === 0) {
-        return;
-      }
-
-      const angle = Math.atan2(deltaY, deltaX);
-      const angleDelta = Math.atan2(
-        Math.sin(angle - startAngle),
-        Math.cos(angle - startAngle),
-      );
-      const rotationDelta = Math.abs((angleDelta * 180) / Math.PI);
-      const zoomDelta = Math.abs((Math.log(distance / startDistance) * 180) / Math.PI);
-
-      if (rotationDelta < 4 && zoomDelta < 4 && translationDelta < 12) {
-        return;
-      }
-
-      gestureMode =
-        translationDelta >= 12 || rotationDelta <= zoomDelta ? "zoom" : "rotate";
-
-      if (touchGestures.touchGestures) {
-        touchGestures.touchGestures._rotating = gestureMode === "rotate";
-        touchGestures.touchGestures._zooming = true;
-        if (gestureMode === "rotate") {
-          touchGestures.touchGestures._startDist = distance;
-          touchGestures.touchGestures._startZoom = map.getZoom();
-        }
-      }
+    const resetGesture = () => {
+      gestureIntent = null;
+      rotationStartDistance = 0;
     };
 
     const beginGesture = (event: TouchEvent) => {
@@ -925,25 +861,91 @@ function TouchGestureModeController() {
       }
 
       const [firstTouch, secondTouch] = event.touches;
-      const deltaX = firstTouch.clientX - secondTouch.clientX;
-      const deltaY = firstTouch.clientY - secondTouch.clientY;
-      startAngle = Math.atan2(deltaY, deltaX);
-      startDistance = Math.hypot(deltaX, deltaY);
-      startMidpoint = [
-        (firstTouch.clientX + secondTouch.clientX) / 2,
-        (firstTouch.clientY + secondTouch.clientY) / 2,
-      ];
-      gestureMode = null;
+      const vector = L.point(
+        firstTouch.clientX - secondTouch.clientX,
+        firstTouch.clientY - secondTouch.clientY,
+      );
+
+      startDistance = vector.distanceTo(L.point(0, 0));
+      startAngle = Math.atan2(vector.y, vector.x);
+    };
+
+    const updateGesture = (event: TouchEvent) => {
+      if (event.touches.length !== 2 || startDistance === 0) {
+        return;
+      }
+
+      const [firstTouch, secondTouch] = event.touches;
+      const vector = L.point(
+        firstTouch.clientX - secondTouch.clientX,
+        firstTouch.clientY - secondTouch.clientY,
+      );
+      const distance = vector.distanceTo(L.point(0, 0));
+      const angle = Math.atan2(vector.y, vector.x);
+      const angleDelta = Math.atan2(
+        Math.sin(angle - startAngle),
+        Math.cos(angle - startAngle),
+      );
+      const rotationDelta = Math.abs((angleDelta * 180) / Math.PI);
+      const zoomScaleDelta = Math.abs(Math.log(distance / startDistance));
+      const handler = touchGestures.touchGestures;
+
+      if (!handler) {
+        return;
+      }
+
+      if (!gestureIntent) {
+        if (
+          rotationDelta >= ROTATION_START_DEGREES &&
+          rotationDelta > zoomScaleDelta * (180 / Math.PI)
+        ) {
+          gestureIntent = "rotate";
+          rotationStartDistance = distance;
+          handler._rotating = true;
+          handler._zooming = true;
+          handler._startDist = distance;
+          handler._startZoom = map.getZoom();
+        } else if (zoomScaleDelta >= ZOOM_START_SCALE_DELTA) {
+          gestureIntent = "zoom";
+          handler._rotating = false;
+          handler._zooming = true;
+        }
+
+        return;
+      }
+
+      if (gestureIntent === "zoom") {
+        handler._rotating = false;
+        handler._zooming = true;
+        return;
+      }
+
+      const rotationZoomDelta = Math.abs(Math.log(distance / rotationStartDistance));
+
+      if (rotationZoomDelta >= ROTATION_TO_ZOOM_SCALE_DELTA) {
+        // A deliberate pinch after a rotation begins transitions to Leaflet's
+        // stable pan-and-zoom path. A zoom-first gesture never enables rotation.
+        gestureIntent = "zoom";
+        handler._rotating = false;
+        handler._zooming = true;
+        return;
+      }
+
+      // Keep the plugin's zoom frame at scale 1 while the gesture is rotation-only.
+      handler._rotating = true;
+      handler._zooming = true;
+      handler._startDist = distance;
+      handler._startZoom = map.getZoom();
     };
 
     container.addEventListener("touchstart", beginGesture, { capture: true, passive: true });
-    container.addEventListener("touchmove", selectGestureMode, { capture: true, passive: true });
+    container.addEventListener("touchmove", updateGesture, { capture: true, passive: true });
     container.addEventListener("touchend", resetGesture, { capture: true, passive: true });
     container.addEventListener("touchcancel", resetGesture, { capture: true, passive: true });
 
     return () => {
       container.removeEventListener("touchstart", beginGesture, true);
-      container.removeEventListener("touchmove", selectGestureMode, true);
+      container.removeEventListener("touchmove", updateGesture, true);
       container.removeEventListener("touchend", resetGesture, true);
       container.removeEventListener("touchcancel", resetGesture, true);
     };
@@ -1508,7 +1510,7 @@ function RotatableOSMMap({
           onZoomChange={setZoomLevel}
           onBoundsChange={setViewportBounds}
         />
-        {rotationEnabled ? <TouchGestureModeController /> : null}
+        {rotationEnabled ? <TouchGestureIntentController /> : null}
 
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
