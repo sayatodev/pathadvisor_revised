@@ -834,6 +834,7 @@ function TouchGestureModeController() {
     const container = map.getContainer();
     let startAngle = 0;
     let startDistance = 0;
+    let startMidpoint: [number, number] = [0, 0];
     let gestureMode: "rotate" | "zoom" | null = null;
 
     const resetGesture = () => {
@@ -849,6 +850,14 @@ function TouchGestureModeController() {
       const deltaX = firstTouch.clientX - secondTouch.clientX;
       const deltaY = firstTouch.clientY - secondTouch.clientY;
       const distance = Math.hypot(deltaX, deltaY);
+      const midpoint: [number, number] = [
+        (firstTouch.clientX + secondTouch.clientX) / 2,
+        (firstTouch.clientY + secondTouch.clientY) / 2,
+      ];
+      const translationDelta = Math.hypot(
+        midpoint[0] - startMidpoint[0],
+        midpoint[1] - startMidpoint[1],
+      );
 
       const touchGestures = map as L.Map & {
         touchGestures?: {
@@ -858,6 +867,14 @@ function TouchGestureModeController() {
           _zooming: boolean;
         };
       };
+
+      if (gestureMode === "rotate" && translationDelta >= 12 && touchGestures.touchGestures) {
+        // Pinch midpoint movement takes precedence over rotation because the plugin
+        // cannot keep vector overlays aligned during a simultaneous pan and rotate.
+        gestureMode = "zoom";
+        touchGestures.touchGestures._rotating = false;
+        touchGestures.touchGestures._zooming = true;
+      }
 
       if (gestureMode === "rotate" && touchGestures.touchGestures) {
         // The plugin's rotation handler still needs its zoom frame to update the map.
@@ -885,11 +902,12 @@ function TouchGestureModeController() {
       const rotationDelta = Math.abs((angleDelta * 180) / Math.PI);
       const zoomDelta = Math.abs((Math.log(distance / startDistance) * 180) / Math.PI);
 
-      if (rotationDelta < 4 && zoomDelta < 4) {
+      if (rotationDelta < 4 && zoomDelta < 4 && translationDelta < 12) {
         return;
       }
 
-      gestureMode = rotationDelta > zoomDelta ? "rotate" : "zoom";
+      gestureMode =
+        translationDelta >= 12 || rotationDelta <= zoomDelta ? "zoom" : "rotate";
 
       if (touchGestures.touchGestures) {
         touchGestures.touchGestures._rotating = gestureMode === "rotate";
@@ -911,6 +929,10 @@ function TouchGestureModeController() {
       const deltaY = firstTouch.clientY - secondTouch.clientY;
       startAngle = Math.atan2(deltaY, deltaX);
       startDistance = Math.hypot(deltaX, deltaY);
+      startMidpoint = [
+        (firstTouch.clientX + secondTouch.clientX) / 2,
+        (firstTouch.clientY + secondTouch.clientY) / 2,
+      ];
       gestureMode = null;
     };
 
