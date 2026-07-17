@@ -69,8 +69,21 @@ input {
 }
 
 .leaflet-control-zoom a {
+  background-color: #ffffff !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
+  background-size: 18px !important;
   border: none !important;
   color: #0f172a !important;
+  font-size: 0 !important;
+}
+
+.leaflet-control-zoom-in {
+  background-image: url("/mdi/plus.svg") !important;
+}
+
+.leaflet-control-zoom-out {
+  background-image: url("/mdi/minus.svg") !important;
 }
 
 @media (max-width: 767px) {
@@ -237,4 +250,10 @@ input {
   -webkit-text-fill-color: #ffffff !important;
   -webkit-text-stroke: 1px #000 !important;
   white-space: nowrap;
+}
+
+.pathadvisor-venue-label--selected {
+  color: #e5ad75;
+  -webkit-text-fill-color: #e5ad75 !important;
+  -webkit-text-stroke: 1px #4c1010 !important;
 }

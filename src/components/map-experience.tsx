@@ -10,6 +10,7 @@ import {
   prefetchFloorDataForBuilding,
   getDirections,
   getFloorData,
+  getPlaceCategory,
   getPlaceDetail,
   searchCampusPlaces,
   searchRouteablePlaces,
@@ -38,7 +39,29 @@ type RouteDraft = {
   end: SearchPlace | null;
 };
 
-type SelectionSource = "search" | "map";
+type MdiIconName =
+  | "arrow-left"
+  | "arrow-right"
+  | "arrow-top-right"
+  | "chevron-down"
+  | "clock-outline"
+  | "crosshairs-gps"
+  | "directions"
+  | "home-outline"
+  | "magnify"
+  | "magnify-scan"
+  | "map-marker-outline"
+  | "swap-vertical";
+
+function MdiIcon({
+  name,
+  className = "",
+}: {
+  name: MdiIconName;
+  className?: string;
+}) {
+  return <Image src={`/mdi/${name}.svg`} alt="" width={20} height={20} className={className} />;
+}
 
 function formatDuration(minutes: number | null) {
   if (minutes === null) {
@@ -62,6 +85,48 @@ function formatDistance(distance: number | null) {
 
 function floorChipLabel(floor: BuildingFloorSummary) {
   return floor.name === "G" ? "G" : floor.name;
+}
+
+function placeLocationLabel(place: PlaceDetail) {
+  const floor = place.floorName
+    ? place.floorName.startsWith("Floor ")
+      ? place.floorName
+      : `Floor ${place.floorName}`
+    : "";
+
+  return [floor, place.buildingName].filter(Boolean).join(", ") || place.address || "Campus";
+}
+
+function venueDisplayName(name: string, category?: string) {
+  const normalizedName = name.trim();
+  const toiletCodePattern = /^\d{1,5}T$/i;
+  const verticalTransportCodePattern = /^(UG\d*|LG\d*|G\d*|B\d{1,2}|L\d{1,2}|\d{1,2})(ESC|SC)(\d{2,3})$/i;
+  const verticalTransportMatch = normalizedName.match(verticalTransportCodePattern);
+  const roomCodePattern = /^(?:(?:UG|LG|G)|(?:B|L)\d{1,2}|\d{1,2})\d{2,4}[A-Z]?$/i;
+
+  if (toiletCodePattern.test(normalizedName)) {
+    const normalizedCategory = category?.toLowerCase() ?? "";
+    const toiletLabel = normalizedCategory.includes("disable") || normalizedCategory.includes("accessible")
+      ? "Accessible Toilet"
+      : normalizedCategory.includes("male")
+        ? "Male Toilet"
+        : normalizedCategory.includes("female")
+          ? "Female Toilet"
+          : "Toilet";
+
+    return `${toiletLabel} (Rm. ${normalizedName})`;
+  }
+
+  if (verticalTransportMatch) {
+    const [, floor, type, number] = verticalTransportMatch;
+    const typeLabel = type.toUpperCase() === "ESC" ? "Escalator" : "Staircase";
+
+    return `${typeLabel} ${number} (Floor ${floor})`;
+  }
+
+  return roomCodePattern.test(normalizedName) && !/^room\b/i.test(normalizedName)
+    ? `Room ${normalizedName}`
+    : normalizedName;
 }
 
 function routeFloorOptions(routeData: RouteData | null) {
@@ -92,6 +157,10 @@ export function MapExperience() {
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<SearchPlace | null>(null);
   const [placeDetail, setPlaceDetail] = useState<PlaceDetail | null>(null);
+  const [fetchedPlaceCategory, setFetchedPlaceCategory] = useState<{
+    placeId: string;
+    category: string;
+  } | null>(null);
   const [selectedFloorId, setSelectedFloorId] = useState<string | null>(null);
   const [floorData, setFloorData] = useState<FloorData | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -107,7 +176,7 @@ export function MapExperience() {
   const [routeData, setRouteData] = useState<RouteData | null>(null);
   const [loadingDirections, setLoadingDirections] = useState(false);
   const [focusedSegmentId, setFocusedSegmentId] = useState<string | null>(null);
-  const [selectionSource, setSelectionSource] = useState<SelectionSource>("search");
+  const [venueFocusRequest, setVenueFocusRequest] = useState(0);
   const [floorMenuOpen, setFloorMenuOpen] = useState(false);
   const [autoVisibleBuildingId, setAutoVisibleBuildingId] = useState<string | null>(null);
   const [autoVisibleBuildingFloors, setAutoVisibleBuildingFloors] = useState<
@@ -166,6 +235,35 @@ export function MapExperience() {
 
     void loadPlace();
   }, [selectedPlace]);
+
+  useEffect(() => {
+    if (
+      !selectedPlace ||
+      !placeDetail ||
+      placeDetail.id !== selectedPlace.id ||
+      Boolean(placeDetail.description || selectedPlace.category)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    getPlaceCategory(placeDetail.id, placeDetail.name)
+      .then((category) => {
+        if (!cancelled) {
+          setFetchedPlaceCategory(category ? { placeId: placeDetail.id, category } : null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFetchedPlaceCategory(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [placeDetail, selectedPlace]);
 
   useEffect(() => {
     if (!autoVisibleBuildingId || routeMode || selectedPlace) {
@@ -361,7 +459,6 @@ export function MapExperience() {
       if (buildingPlace) {
         preferredFloorSelectionRef.current = floorId;
         setSelectedPlace(buildingPlace);
-        setSelectionSource("search");
         return;
       }
     }
@@ -369,9 +466,8 @@ export function MapExperience() {
     setSelectedFloorId(floorId);
   }
 
-  function selectPlace(place: SearchPlace, source: SelectionSource = "search") {
+  function selectPlace(place: SearchPlace) {
     setSelectedPlace(place);
-    setSelectionSource(source);
     setSearchQuery("");
     setSearchResults([]);
     setSearchError(null);
@@ -387,10 +483,11 @@ export function MapExperience() {
       kind: "building",
       name,
       subtitle: "Building",
+      category: "Building",
       description: "",
       routeable: false,
       buildingId,
-    }, "map");
+    });
   }
 
   function selectVenueFromMap(venue: {
@@ -404,9 +501,10 @@ export function MapExperience() {
       kind: venue.kind,
       name: venue.name,
       subtitle: venue.subtitle,
+      category: venue.subtitle,
       description: "",
       routeable: true,
-    }, "map");
+    });
   }
 
   function activateDirections() {
@@ -415,7 +513,6 @@ export function MapExperience() {
     }
 
     setRouteMode(true);
-    setSelectionSource("search");
     setRouteData(null);
     setRouteError(null);
     setRouteDraft((current) => ({
@@ -456,11 +553,15 @@ export function MapExperience() {
 
     if (field === "end") {
       setSelectedPlace(place);
-      setSelectionSource("search");
     }
   }
 
   const routeSteps = effectiveRouteData?.segments ?? [];
+  const resolvedFetchedCategory =
+    fetchedPlaceCategory && fetchedPlaceCategory.placeId === placeDetail?.id
+      ? fetchedPlaceCategory.category
+      : undefined;
+  const drawerCategory = selectedPlace?.category || resolvedFetchedCategory;
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-slate-950">
@@ -468,7 +569,6 @@ export function MapExperience() {
         bootstrap={bootstrap}
         floorData={floorData}
         focusedSegmentId={focusedSegmentId}
-        interactionSource={selectionSource}
         isFloorSelectorVisible={floorOptions.length > 0 && Boolean(currentFloorOption)}
         onAutoVisibleBuildingChange={setAutoVisibleBuildingId}
         onSelectBuilding={selectBuildingFromMap}
@@ -477,15 +577,16 @@ export function MapExperience() {
         routeData={effectiveRouteData}
         selectedFloorId={selectedFloorId}
         selectedPlace={selectedPlace}
+        venueFocusRequest={venueFocusRequest}
       />
 
       <div className="pointer-events-none absolute inset-0 z-[500]">
         <header className="px-4 pt-4 sm:px-6 sm:pt-6">
-          <section className="pointer-events-auto w-full max-w-lg rounded-[1.3rem] border border-slate-200/80 bg-white/92 px-0 py-1 text-slate-900 shadow-[0_20px_52px_rgba(15,23,42,0.18)] backdrop-blur-xl sm:mr-auto">
+          <section className="pointer-events-auto w-full max-w-lg rounded-[1.75rem] border-2 border-slate-950 bg-white px-1.5 py-1.5 text-slate-900 shadow-[0_16px_32px_rgba(15,23,42,0.18)] sm:mr-auto">
             {!routeMode ? (
               <>
-                <div className="flex items-center gap-2 rounded-[0.95rem] bg-white px-3 py-2.5">
-                  <span className="text-base text-slate-400">⌕</span>
+                <div className="flex h-12 items-center gap-3 px-3">
+                  <MdiIcon name="magnify" className="h-5 w-5 shrink-0 opacity-65" />
                   <input
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
@@ -494,20 +595,20 @@ export function MapExperience() {
                   />
                 </div>
                 {(visibleSearchResults.length > 0 || searchError) && (
-                  <div className="mt-3 max-h-[46vh] overflow-auto pr-1">
+                  <div className="max-h-[46vh] overflow-auto border-t border-slate-300 px-1 pt-1">
                     {searchError ? (
                       <p className="px-1 py-2 text-sm text-rose-600">{searchError}</p>
                     ) : (
-                      <div className="space-y-2">
+                      <div className="divide-y divide-slate-200">
                         {visibleSearchResults.map((place) => (
                           <button
                             key={place.id}
                             type="button"
                             onClick={() => selectPlace(place)}
-                            className={`flex w-full items-start justify-between gap-3 rounded-[1.05rem] border px-3 py-3 text-left transition ${
+                            className={`flex w-full items-start justify-between gap-3 rounded-lg px-3 py-3 text-left transition ${
                               selectedPlace?.id === place.id
-                                ? "border-sky-300 bg-sky-50"
-                                : "border-transparent bg-slate-50/90 hover:border-slate-200 hover:bg-white"
+                                ? "bg-sky-50"
+                                : "hover:bg-slate-50"
                             }`}
                           >
                             <div>
@@ -516,7 +617,10 @@ export function MapExperience() {
                                 {place.subtitle}
                               </p>
                             </div>
-                            <span className="mt-0.5 text-slate-400">{place.routeable ? "↗" : "⌂"}</span>
+                            <MdiIcon
+                              name={place.routeable ? "arrow-top-right" : "home-outline"}
+                              className="mt-0.5 h-5 w-5 shrink-0 opacity-50"
+                            />
                           </button>
                         ))}
                       </div>
@@ -531,9 +635,10 @@ export function MapExperience() {
                     type="button"
                     onClick={resetDirections}
                     aria-label="Close directions"
-                    className="mr-2 flex w-10 shrink-0 items-center justify-center rounded-2xl text-slate-600 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+                    title="Close directions"
+                    className="mr-2 flex w-10 shrink-0 items-center justify-center rounded-lg text-slate-600 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
                   >
-                    <Image src="/buttons/arrow-back.png" alt="" width={20} height={20} />
+                    <MdiIcon name="arrow-left" />
                   </button>
 
                   <div className="relative min-w-0 flex-1 py-0.5">
@@ -626,30 +731,31 @@ export function MapExperience() {
                       }));
                     }}
                     aria-label="Swap start and destination"
-                    className="ml-2 flex w-10 shrink-0 items-center justify-center rounded-2xl text-slate-600 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+                    title="Swap start and destination"
+                    className="ml-2 flex w-10 shrink-0 items-center justify-center rounded-lg text-slate-600 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
                   >
-                    <Image src="/buttons/swap-vertical.png" alt="" width={20} height={20} />
+                    <MdiIcon name="swap-vertical" />
                   </button>
                 </div>
 
                 {(routeSearchResults.length > 0 || routeError) && activeRouteField && (
-                  <div className="mt-3 max-h-[40vh] overflow-auto pr-1">
+                  <div className="max-h-[40vh] overflow-auto border-t border-slate-300 px-1 pt-1">
                     {routeError ? (
                       <p className="px-1 py-2 text-sm text-rose-600">{routeError}</p>
                     ) : (
-                      <div className="space-y-2">
+                      <div className="divide-y divide-slate-200">
                         {routeSearchResults.map((place) => (
                           <button
                             key={`${activeRouteField}-${place.id}`}
                             type="button"
                             onClick={() => selectRouteResult(activeRouteField, place)}
-                            className="flex w-full items-start justify-between gap-3 rounded-[1rem] border border-transparent bg-slate-50/90 px-3 py-3 text-left hover:border-slate-200 hover:bg-white"
+                            className="flex w-full items-start justify-between gap-3 rounded-lg px-3 py-3 text-left hover:bg-slate-50"
                           >
                             <div>
                               <p className="text-sm font-semibold text-slate-900">{place.name}</p>
                               <p className="mt-1 text-xs text-slate-500">{place.subtitle}</p>
                             </div>
-                            <span className="mt-0.5 text-slate-400">↗</span>
+                            <MdiIcon name="arrow-top-right" className="mt-0.5 h-5 w-5 shrink-0 opacity-50" />
                           </button>
                         ))}
                       </div>
@@ -662,29 +768,30 @@ export function MapExperience() {
         </header>
 
         <section className="pointer-events-auto absolute inset-x-0 bottom-0 z-[550]">
-          <div className="relative mx-auto w-full max-w-3xl rounded-t-[1.8rem] border border-slate-200 bg-white px-5 pb-6 pt-3 text-slate-900 shadow-[0_-16px_48px_rgba(15,23,42,0.16)]">
+          <div className="relative mx-auto w-full max-w-3xl rounded-t-[1.75rem] border-x-2 border-t-2 border-slate-950 bg-white px-4 pb-5 pt-3 text-slate-900 shadow-[0_-12px_28px_rgba(15,23,42,0.18)]">
             {floorOptions.length > 0 && currentFloorOption ? (
               <div className="pointer-events-auto absolute bottom-full left-4 mb-3 sm:left-6">
                 <div className="flex flex-col-reverse items-start gap-2">
                   <button
                     type="button"
                     onClick={() => setFloorMenuOpen((open) => !open)}
-                    className="inline-flex min-w-16 items-center justify-between gap-3 rounded-[1.15rem] border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-900 shadow-[0_14px_40px_rgba(15,23,42,0.15)]"
+                    className="inline-flex min-w-15 items-center justify-between gap-2 rounded-lg border-2 border-slate-950 bg-white px-3 py-2.5 text-sm font-semibold text-slate-900 shadow-[0_8px_18px_rgba(15,23,42,0.14)]"
                   >
                     <span>{currentFloorOption.label}</span>
-                    <span className={`text-xs text-slate-500 transition-transform ${floorMenuOpen ? "rotate-180" : ""}`}>
-                      ▾
-                    </span>
+                    <MdiIcon
+                      name="chevron-down"
+                      className={`h-4 w-4 opacity-65 transition-transform ${floorMenuOpen ? "rotate-180" : ""}`}
+                    />
                   </button>
 
                   {floorMenuOpen ? (
-                    <div className="pathadvisor-hide-scrollbar flex max-h-[42vh] flex-col gap-2 overflow-auto rounded-[1.25rem] border border-slate-200 bg-white p-2 shadow-[0_18px_48px_rgba(15,23,42,0.16)]">
+                    <div className="pathadvisor-hide-scrollbar flex max-h-[42vh] flex-col gap-1 overflow-auto rounded-xl border-2 border-slate-950 bg-white p-1.5 shadow-[0_12px_28px_rgba(15,23,42,0.16)]">
                       {floorOptions.map((floor) => (
                         <button
                           key={floor.id}
                           type="button"
                           onClick={() => handleFloorSelect(floor.id)}
-                          className={`rounded-[0.95rem] px-3 py-2 text-left text-sm font-semibold whitespace-nowrap ${
+                          className={`rounded-md px-3 py-2 text-left text-sm font-semibold whitespace-nowrap ${
                             selectedFloorId === floor.id
                               ? "bg-slate-900 text-white"
                               : "bg-white text-slate-700 hover:bg-slate-50"
@@ -698,7 +805,7 @@ export function MapExperience() {
                 </div>
               </div>
             ) : null}
-            <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-slate-300" />
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-slate-300" />
             {loadingPlace ? (
               <div className="space-y-2">
                 <div className="h-4 w-24 rounded-full bg-slate-200" />
@@ -707,42 +814,20 @@ export function MapExperience() {
               </div>
             ) : routeMode ? (
               <>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-700/80">
-                  Directions
-                </p>
-                <h1 className="mt-2 text-lg font-semibold">
-                  {effectiveRouteData?.endLabel || routeDraft.end?.name || "Choose a destination"}
+                <h1 className="text-xl font-semibold text-slate-950">
+                  {effectiveRouteData?.startLabel || routeDraft.start?.name || "Choose a starting point"}
                 </h1>
-                <p className="mt-1 text-sm text-slate-500">
-                  {effectiveRouteData?.startLabel
-                    ? `From ${effectiveRouteData.startLabel}`
-                    : routeDraft.start
-                      ? `From ${routeDraft.start.name}`
-                      : "Add a starting point to calculate the route"}
-                </p>
-
-                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Time</p>
-                    <p className="mt-1 font-medium text-slate-900">
-                      {effectiveRouteData
-                        ? formatDuration(effectiveRouteData.time)
-                        : loadingDirections
-                          ? "…"
-                          : "—"}
-                    </p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Distance</p>
-                    <p className="mt-1 font-medium text-slate-900">
-                      {effectiveRouteData
-                        ? formatDistance(effectiveRouteData.distance)
-                        : loadingDirections
-                          ? "…"
-                          : "—"}
-                    </p>
-                  </div>
+                <div className="mt-1 flex items-center gap-1.5 text-xl font-semibold text-slate-950">
+                  <MdiIcon name="arrow-right" className="h-5 w-5 shrink-0" />
+                  <h2>{effectiveRouteData?.endLabel || routeDraft.end?.name || "Choose a destination"}</h2>
                 </div>
+                <p className="mt-2 text-sm font-medium text-[#bd7b2c]">
+                  {effectiveRouteData
+                    ? `${formatDuration(effectiveRouteData.time)} • ${formatDistance(effectiveRouteData.distance)}`
+                    : loadingDirections
+                      ? "Calculating route…"
+                      : "Select two venues to calculate the route"}
+                </p>
 
                 <div className="mt-4 max-h-[34vh] space-y-2 overflow-auto pr-1">
                   {routeDraft.start && routeDraft.end && routeDraft.start.id === routeDraft.end.id ? (
@@ -769,7 +854,7 @@ export function MapExperience() {
                             setSelectedFloorId(segment.floorId);
                           }
                         }}
-                        className={`w-full rounded-[1rem] border px-3 py-3 text-left ${
+                        className={`w-full rounded-lg border px-3 py-3 text-left ${
                           focusedSegmentId === segment.id
                             ? "border-sky-300 bg-sky-50"
                             : "border-slate-200 bg-white"
@@ -779,8 +864,10 @@ export function MapExperience() {
                           <p className="text-sm font-medium text-sky-700">{segment.info}</p>
                         ) : (
                           <>
-                            <p className="text-sm font-semibold text-slate-900">
-                              {segment.start || "Start"}{segment.end ? ` → ${segment.end}` : ""}
+                            <p className="flex items-center gap-1 text-sm font-semibold text-slate-900">
+                              <span>{segment.start || "Start"}</span>
+                              {segment.end ? <MdiIcon name="arrow-right" className="h-4 w-4 shrink-0" /> : null}
+                              {segment.end ? <span>{segment.end}</span> : null}
                             </p>
                             <p className="mt-1 text-xs text-slate-500">{segment.locationLabel}</p>
                             <p className="mt-2 text-xs text-slate-400">
@@ -795,46 +882,38 @@ export function MapExperience() {
               </>
             ) : selectedPlace && placeDetail ? (
               <>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-700/80">
-                  {placeDetail.isBuilding ? "Building" : "Venue"}
-                </p>
-                <div className="mt-2 flex items-start justify-between gap-4">
-                  <div>
-                    <h1 className="text-xl font-semibold">{placeDetail.name}</h1>
-                    <p className="mt-1 text-sm text-slate-500">
-                      {placeDetail.address ||
-                        [placeDetail.buildingName, placeDetail.floorName].filter(Boolean).join(" • ")}
-                    </p>
+                <div className="flex items-start justify-between gap-3">
+                  <h1 className="min-w-0 text-xl font-semibold text-slate-950">
+                    {venueDisplayName(placeDetail.name, drawerCategory)}
+                  </h1>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={activateDirections}
+                      disabled={!selectedPlace.routeable}
+                      aria-label="Directions"
+                      title="Directions"
+                      className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+                    >
+                      <MdiIcon name="directions" className="h-5 w-5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setVenueFocusRequest((request) => request + 1)}
+                      disabled={placeDetail.isBuilding || !placeDetail.coordinates}
+                      aria-label="Focus venue"
+                      title="Focus venue"
+                      className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+                    >
+                      <MdiIcon name="crosshairs-gps" className="h-5 w-5" />
+                    </button>
                   </div>
-                  <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold text-slate-600">
-                    {selectedPlace.subtitle}
-                  </span>
                 </div>
-
-                {placeDetail.description ? (
-                  <p className="mt-3 text-sm leading-6 text-slate-600">{placeDetail.description}</p>
-                ) : null}
-
-                <div className="mt-4 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={activateDirections}
-                    disabled={!selectedPlace.routeable}
-                    className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                      selectedPlace.routeable
-                        ? "bg-slate-900 text-white"
-                        : "bg-slate-100 text-slate-400"
-                    }`}
-                  >
-                    Directions
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery(placeDetail.name)}
-                    className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
-                  >
-                    Search Similar
-                  </button>
+                <div className="mt-1">
+                  <p className="mt-1 text-sm font-medium text-[#bd7b2c]">
+                    {placeDetail.description || drawerCategory || "Venue"}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500">{placeLocationLabel(placeDetail)}</p>
                 </div>
               </>
             ) : bootstrap ? (

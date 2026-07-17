@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import {
-  CircleMarker,
   GeoJSON,
   MapContainer,
   Marker,
+  Pane,
   Polyline,
   TileLayer,
   ZoomControl,
@@ -29,6 +29,7 @@ const LABEL_ZOOM_LEVEL_2 = 18.2;
 const LABEL_ZOOM_LEVEL_3 = 19.1;
 const LABEL_COLLISION_FREE_ZOOM = 20;
 const BUILDING_FLOOR_FOCUS_ZOOM = 18.8;
+const VENUE_FOCUS_ZOOM = 19.2;
 const LIFT_MARKER_MIN_ZOOM = 17.5;
 const FLOOR_TYPE_ICON_PATHS: Partial<Record<string, string>> = {
   "Lift Shaft": "/floor-icons/elevator.png",
@@ -55,11 +56,11 @@ type OSMMapProps = {
   bootstrap: CampusBootstrap | null;
   floorData: FloorData | null;
   isFloorSelectorVisible: boolean;
-  interactionSource: "search" | "map";
   onAutoVisibleBuildingChange: (buildingId: string | null) => void;
   routeData: RouteData | null;
   selectedFloorId: string | null;
   selectedPlace: SearchPlace | null;
+  venueFocusRequest: number;
   placeDetail: PlaceDetail | null;
   focusedSegmentId: string | null;
   onSelectBuilding: (buildingId: string, name: string) => void;
@@ -345,9 +346,31 @@ function isClickableFloorFeature(
   return Boolean(properties?.locationId || properties?.pointOfInterestId);
 }
 
+function isSelectedFloorFeature(
+  properties: FloorFeatureProperties | undefined,
+  selectedLocationId?: string,
+  selectedPointOfInterestId?: string,
+) {
+  return (
+    (Boolean(selectedLocationId) && properties?.locationId === selectedLocationId) ||
+    (Boolean(selectedPointOfInterestId) &&
+      properties?.pointOfInterestId === selectedPointOfInterestId)
+  );
+}
+
 function normalizeColorHex(colorHex: string | undefined) {
   const normalized = colorHex?.trim().replace(/^#/, "").toUpperCase() ?? "";
   return normalized.length === 6 ? `#${normalized}` : null;
+}
+
+function darkenColorHex(colorHex: string, amount: number) {
+  const value = Number.parseInt(colorHex.slice(1), 16);
+  const darkenChannel = (shift: number) =>
+    Math.max(0, Math.round(((value >> shift) & 0xff) * (1 - amount)));
+
+  return `#${[darkenChannel(16), darkenChannel(8), darkenChannel(0)]
+    .map((channel) => channel.toString(16).padStart(2, "0"))
+    .join("")}`;
 }
 
 function isPathwayLikeFeature(
@@ -511,10 +534,12 @@ function floorStyle({
   colorHex?: string;
 }) {
   if (isSelected) {
+    const upstreamFillColor = normalizeColorHex(colorHex) ?? "#d1d5db";
+
     return {
-      color: "#64748b",
-      weight: 1.05,
-      fillColor: "#7dd3fc",
+      color: darkenColorHex(upstreamFillColor, 0.3),
+      weight: 1.1,
+      fillColor: darkenColorHex(upstreamFillColor, 0.12),
       fillOpacity: 1,
     };
   }
@@ -595,10 +620,14 @@ function createFacilityIcon({
   });
 }
 
-function createVenueLabelIcon(label: string) {
+function createVenueLabelIcon(label: string, isSelected: boolean) {
+  const selectedStyle = isSelected
+    ? ' style="color:#e5ad75;-webkit-text-fill-color:#e5ad75 !important;-webkit-text-stroke:1px #4c1010 !important;"'
+    : "";
+
   return L.divIcon({
     className: "pathadvisor-venue-label-icon",
-    html: `<div class="pathadvisor-venue-label">${label}</div>`,
+    html: `<div class="pathadvisor-venue-label${isSelected ? " pathadvisor-venue-label--selected" : ""}"${selectedStyle}>${label}</div>`,
     iconSize: [0, 0],
     iconAnchor: [0, 0],
   });
@@ -664,16 +693,20 @@ function distanceMeters(left: [number, number], right: [number, number]) {
 
 function ViewportController({
   bootstrap,
-  disableVenueFocus,
   routeData,
   selectedPlace,
   placeDetail,
   focusedSegmentId,
+  venueFocusRequest,
 }: Pick<
   OSMMapProps,
-  "bootstrap" | "routeData" | "selectedPlace" | "placeDetail" | "focusedSegmentId"
+  | "bootstrap"
+  | "routeData"
+  | "selectedPlace"
+  | "placeDetail"
+  | "focusedSegmentId"
+  | "venueFocusRequest"
 > & {
-  disableVenueFocus: boolean;
 }) {
   const map = useMap();
 
@@ -693,8 +726,13 @@ function ViewportController({
       return;
     }
 
-    if (placeDetail?.coordinates && !disableVenueFocus) {
-      map.flyTo(placeDetail.coordinates, 19.2, {
+    const currentVenueDetail =
+      selectedPlace?.kind !== "building" && placeDetail?.id === selectedPlace?.id
+        ? placeDetail
+        : null;
+
+    if (currentVenueDetail?.coordinates) {
+      map.flyTo(currentVenueDetail.coordinates, Math.max(map.getZoom(), VENUE_FOCUS_ZOOM), {
         animate: true,
         duration: 0.7,
       });
@@ -728,12 +766,12 @@ function ViewportController({
     }
   }, [
     bootstrap,
-    disableVenueFocus,
     focusedSegmentId,
     map,
     placeDetail,
     routeData,
     selectedPlace,
+    venueFocusRequest,
   ]);
 
   return null;
@@ -908,9 +946,7 @@ function FloorLayer({
   const floorGeoJson = useMemo(() => toFloorGeoJson(floorData), [floorData]);
 
   const isFeatureSelected = (properties: FloorFeatureProperties | undefined) =>
-    (Boolean(selectedLocationId) && properties?.locationId === selectedLocationId) ||
-    (Boolean(selectedPointOfInterestId) &&
-      properties?.pointOfInterestId === selectedPointOfInterestId);
+    isSelectedFloorFeature(properties, selectedLocationId, selectedPointOfInterestId);
 
   const styleForFeature = (
     properties: FloorFeatureProperties | undefined,
@@ -1036,11 +1072,11 @@ function RotatableOSMMap({
   bootstrap,
   floorData,
   isFloorSelectorVisible,
-  interactionSource,
   onAutoVisibleBuildingChange,
   routeData,
   selectedFloorId,
   selectedPlace,
+  venueFocusRequest,
   placeDetail,
   focusedSegmentId,
   onSelectBuilding,
@@ -1054,17 +1090,20 @@ function RotatableOSMMap({
     Record<string, FloorData>
   >({});
 
+  const resolvedPlaceDetail = placeDetail?.id === selectedPlace?.id ? placeDetail : null;
   const selectedLocationId =
-    selectedPlace?.kind === "location" ? selectedPlace.id : placeDetail?.kind === "location" ? placeDetail.id : undefined;
-  const selectedPointOfInterestId =
-    selectedPlace?.kind === "point_of_interest"
-      ? selectedPlace.id
-      : placeDetail?.kind === "point_of_interest"
-        ? placeDetail.id
+    resolvedPlaceDetail?.kind === "location"
+      ? resolvedPlaceDetail.id
+      : selectedPlace?.kind === "location"
+        ? selectedPlace.id
         : undefined;
-  const disableVenueFocusEffects =
-    interactionSource === "map" &&
-    (selectedPlace?.kind === "location" || selectedPlace?.kind === "point_of_interest");
+  const selectedPointOfInterestId =
+    resolvedPlaceDetail?.kind === "point_of_interest"
+      ? resolvedPlaceDetail.id
+      : selectedPlace?.kind === "point_of_interest"
+        ? selectedPlace.id
+        : undefined;
+  const selectedBuildingId = selectedPlace?.kind === "building" ? selectedPlace.id : null;
   const activeBuildingId =
     selectedPlace?.kind === "building"
       ? selectedPlace.id
@@ -1352,11 +1391,24 @@ function RotatableOSMMap({
                 ? 28
                 : 12;
 
-    const sortedFeatures = eligibleFeatures.sort(
-      (left, right) =>
+    const sortedFeatures = eligibleFeatures.sort((left, right) => {
+      const rightIsSelected = isSelectedFloorFeature(
+        right.properties,
+        selectedLocationId,
+        selectedPointOfInterestId,
+      );
+      const leftIsSelected = isSelectedFloorFeature(
+        left.properties,
+        selectedLocationId,
+        selectedPointOfInterestId,
+      );
+
+      return (
+        Number(rightIsSelected) - Number(leftIsSelected) ||
         labelPriority(right.properties, right.geometry) -
-        labelPriority(left.properties, left.geometry),
-    );
+          labelPriority(left.properties, left.geometry)
+      );
+    });
 
     const cappedFeatures =
       maxLabels === Number.POSITIVE_INFINITY
@@ -1368,6 +1420,11 @@ function RotatableOSMMap({
         id: feature.dedupeKey,
         center: labelPointWithinGeometry(feature.geometry),
         label: feature.properties.name,
+        isSelected: isSelectedFloorFeature(
+          feature.properties,
+          selectedLocationId,
+          selectedPointOfInterestId,
+        ),
       }));
     }
 
@@ -1393,10 +1450,21 @@ function RotatableOSMMap({
           id: feature.dedupeKey,
           center,
           label,
+          isSelected: isSelectedFloorFeature(
+            feature.properties,
+            selectedLocationId,
+            selectedPointOfInterestId,
+          ),
         },
       ];
     });
-  }, [autoFloorLayers, floorData, zoomLevel]);
+  }, [
+    autoFloorLayers,
+    floorData,
+    selectedLocationId,
+    selectedPointOfInterestId,
+    zoomLevel,
+  ]);
 
   return (
     <div className="absolute inset-0">
@@ -1427,33 +1495,27 @@ function RotatableOSMMap({
           maxZoom={22}
         />
 
+        <Pane name="routePane" style={{ zIndex: 450 }} />
+
         {bootstrap ? (
           <GeoJSON
             key="campus-footprints"
             data={bootstrap.footprints}
             style={(feature) => ({
               color:
-                feature?.properties?.buildingId === placeDetail?.buildingId ||
-                feature?.properties?.buildingId === selectedPlace?.buildingId ||
-                feature?.properties?.buildingId === selectedPlace?.id
+                feature?.properties?.buildingId === selectedBuildingId
                   ? "#334155"
                   : "#475569",
               weight:
-                feature?.properties?.buildingId === placeDetail?.buildingId ||
-                feature?.properties?.buildingId === selectedPlace?.buildingId ||
-                feature?.properties?.buildingId === selectedPlace?.id
+                feature?.properties?.buildingId === selectedBuildingId
                   ? 1.45
                   : 0.9,
               fillColor:
-                feature?.properties?.buildingId === placeDetail?.buildingId ||
-                feature?.properties?.buildingId === selectedPlace?.buildingId ||
-                feature?.properties?.buildingId === selectedPlace?.id
+                feature?.properties?.buildingId === selectedBuildingId
                   ? "#4b5563"
                   : "#374151",
               fillOpacity:
-                feature?.properties?.buildingId === placeDetail?.buildingId ||
-                feature?.properties?.buildingId === selectedPlace?.buildingId ||
-                feature?.properties?.buildingId === selectedPlace?.id
+                feature?.properties?.buildingId === selectedBuildingId
                   ? 0.98
                   : 0.92,
             })}
@@ -1470,10 +1532,8 @@ function RotatableOSMMap({
             key={`auto-floor-${autoFloor.id}`}
             floorData={autoFloor}
             opacity={isFloorSelectorVisible ? 0.6 : 1}
-            selectedLocationId={disableVenueFocusEffects ? undefined : selectedLocationId}
-            selectedPointOfInterestId={
-              disableVenueFocusEffects ? undefined : selectedPointOfInterestId
-            }
+            selectedLocationId={selectedLocationId}
+            selectedPointOfInterestId={selectedPointOfInterestId}
             onSelectVenue={onSelectVenue}
           />
         ))}
@@ -1482,10 +1542,8 @@ function RotatableOSMMap({
           <FloorLayer
             key={`selected-floor-${floorData.id}`}
             floorData={floorData}
-            selectedLocationId={disableVenueFocusEffects ? undefined : selectedLocationId}
-            selectedPointOfInterestId={
-              disableVenueFocusEffects ? undefined : selectedPointOfInterestId
-            }
+            selectedLocationId={selectedLocationId}
+            selectedPointOfInterestId={selectedPointOfInterestId}
             onSelectVenue={onSelectVenue}
           />
         ) : null}
@@ -1513,7 +1571,7 @@ function RotatableOSMMap({
           <Marker
             key={`label-${feature.id}`}
             position={feature.center}
-            icon={createVenueLabelIcon(feature.label)}
+            icon={createVenueLabelIcon(feature.label, feature.isSelected)}
             interactive={false}
           />
         ))}
@@ -1522,40 +1580,40 @@ function RotatableOSMMap({
           ? visibleSegments
               .filter((segment) => segment.coordinates.length > 1)
               .map((segment) => (
-                <Polyline
-                  key={segment.id}
-                  positions={segment.coordinates}
-                  pathOptions={{
-                    color: segment.id === focusedSegmentId ? "#0f172a" : "#0ea5e9",
-                    opacity: segment.id === focusedSegmentId ? 0.96 : 0.8,
-                    weight: segment.id === focusedSegmentId ? 7 : 5,
-                    lineCap: "round",
-                    lineJoin: "round",
-                  }}
-                />
+                <Fragment key={segment.id}>
+                  <Polyline
+                    positions={segment.coordinates}
+                    pathOptions={{
+                      color: "#ffffff",
+                      opacity: 0.96,
+                      weight: segment.id === focusedSegmentId ? 5.5 : 5,
+                      lineCap: "round",
+                      lineJoin: "round",
+                      pane: "routePane",
+                    }}
+                  />
+                  <Polyline
+                    positions={segment.coordinates}
+                    pathOptions={{
+                      color: "#2d9aed",
+                      opacity: segment.id === focusedSegmentId ? 1 : 0.9,
+                      weight: segment.id === focusedSegmentId ? 3.5 : 3,
+                      lineCap: "round",
+                      lineJoin: "round",
+                      pane: "routePane",
+                    }}
+                  />
+                </Fragment>
               ))
           : null}
 
-        {placeDetail?.coordinates && !disableVenueFocusEffects ? (
-          <CircleMarker
-            center={placeDetail.coordinates}
-            radius={8}
-            pathOptions={{
-              color: "#ffffff",
-              fillColor: "#0f172a",
-              fillOpacity: 1,
-              weight: 3,
-            }}
-          />
-        ) : null}
-
         <ViewportController
           bootstrap={bootstrap}
-          disableVenueFocus={disableVenueFocusEffects}
           focusedSegmentId={focusedSegmentId}
           placeDetail={placeDetail}
           routeData={routeData}
           selectedPlace={selectedPlace}
+          venueFocusRequest={venueFocusRequest}
         />
       </MapContainer>
     </div>

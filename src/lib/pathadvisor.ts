@@ -5,6 +5,7 @@ export type SearchPlace = {
   kind: SearchPlaceKind;
   name: string;
   subtitle: string;
+  category?: string;
   description: string;
   buildingId?: string;
   buildingName?: string;
@@ -255,6 +256,7 @@ const floorNavNodeSummaryCache = new Map<
 >();
 const buildingFloorsCache = new Map<string, Promise<BuildingFloorSummary[]>>();
 const floorDataCache = new Map<string, Promise<FloorData>>();
+const placeCategoryCache = new Map<string, Promise<string | undefined>>();
 const FLOOR_PLAN_CACHE_PREFIX = "pathadvisor:floor-plan:v1:";
 const FLOOR_PLAN_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -402,6 +404,12 @@ function locationKindFromRecord(record: AnyRecord): SearchPlaceKind {
   return "location";
 }
 
+function categoryFromRecord(record: AnyRecord, kind: SearchPlaceKind) {
+  return kind === "point_of_interest"
+    ? asString(record.point_of_interest_type_name || record.type_name)
+    : asString(record.type_name);
+}
+
 function normalizeSearchPlace(record: AnyRecord): SearchPlace {
   const kind = locationKindFromRecord(record);
   const buildingName = asString(record.building_name || record.building_short_name);
@@ -419,6 +427,7 @@ function normalizeSearchPlace(record: AnyRecord): SearchPlace {
   const name =
     kind === "building" ? asString(record.full_name) : asString(record.name || record.full_name);
   const description = asString(record.description);
+  const category = categoryFromRecord(record, kind);
   const subtitleParts = [buildingName, floorName].filter(Boolean);
 
   return {
@@ -432,7 +441,8 @@ function normalizeSearchPlace(record: AnyRecord): SearchPlace {
           ? subtitleParts.join(" • ")
           : kind === "point_of_interest"
             ? asString(record.point_of_interest_type_name)
-            : asString(record.type_name),
+            : category,
+    category: category || undefined,
     description,
     buildingId: asString(record.building_id) || undefined,
     buildingName: buildingName || undefined,
@@ -655,6 +665,31 @@ export async function searchRouteablePlaces(query: string) {
     ...normalizeSearchPlace(record),
     routeable: true,
   }));
+}
+
+export async function getPlaceCategory(id: string, query: string) {
+  let cached = placeCategoryCache.get(id);
+
+  if (!cached) {
+    cached = fetchPathAdvisor<LocationsResponse>("/locations", {
+      search: query,
+      page: 1,
+      limit: 50,
+    })
+      .then((response) => {
+        const record = response.data.locations.find((location) => asString(location._id) === id);
+
+        return record ? categoryFromRecord(record, locationKindFromRecord(record)) || undefined : undefined;
+      })
+      .catch((error) => {
+        placeCategoryCache.delete(id);
+        throw error;
+      });
+
+    placeCategoryCache.set(id, cached);
+  }
+
+  return cached;
 }
 
 export async function getPlaceDetail(id: string): Promise<PlaceDetail> {
