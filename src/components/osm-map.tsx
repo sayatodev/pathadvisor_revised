@@ -27,6 +27,7 @@ const AUTO_FLOOR_MIN_ZOOM = 17.5;
 const MAX_AUTO_BUILDINGS = 6;
 const LABEL_ZOOM_LEVEL_2 = 18.2;
 const LABEL_ZOOM_LEVEL_3 = 19.1;
+const LABEL_COLLISION_FREE_ZOOM = 20;
 const FLOOR_TYPE_ICON_PATHS: Partial<Record<string, string>> = {
   "Lift Shaft": "/floor-icons/elevator.png",
   Escalator: "/floor-icons/escalator.png",
@@ -438,7 +439,9 @@ function labelPriority(
   const displaySetting = properties?.typeDisplaySetting ?? "";
   const normalizedType = properties?.typeName?.trim().toLowerCase() ?? "";
   const areaHint = geometryAreaHint(geometry);
-  let priority = Math.log10(areaHint + 10);
+  // Floor area is deliberately weighted strongly so a large venue keeps its label
+  // when it competes with many nearby rooms.
+  let priority = Math.min(10, areaHint / 120) + Math.log10(areaHint + 10);
 
   if (displaySetting === "show_icon") {
     priority += 8;
@@ -460,6 +463,37 @@ function labelPriority(
   }
 
   return priority;
+}
+
+type LabelCollisionBox = {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+};
+
+function labelCollisionBox(center: [number, number], label: string, zoom: number): LabelCollisionBox {
+  const point = L.CRS.EPSG3857.latLngToPoint(L.latLng(center[0], center[1]), zoom);
+  const padding =
+    zoom >= LABEL_COLLISION_FREE_ZOOM ? 8 : zoom >= 19.4 ? 12 : zoom >= 18.2 ? 18 : 24;
+  const width = Math.min(120, Math.max(32, label.length * 7.2)) + padding * 2;
+  const height = 18 + padding * 2;
+
+  return {
+    left: point.x - width / 2,
+    right: point.x + width / 2,
+    top: point.y - height / 2,
+    bottom: point.y + height / 2,
+  };
+}
+
+function collisionBoxesOverlap(left: LabelCollisionBox, right: LabelCollisionBox) {
+  return !(
+    left.right < right.left ||
+    left.left > right.right ||
+    left.bottom < right.top ||
+    left.top > right.bottom
+  );
 }
 
 function floorStyle({
@@ -523,7 +557,7 @@ function createLiftIcon(label: string) {
     html: `
       <div class="pathadvisor-lift-marker" aria-label="${visibleLabel}">
         <span class="pathadvisor-lift-badge" aria-hidden="true">
-          <img src="${iconPath}" alt="" class="pathadvisor-facility-img" style="width:32px;height:32px;display:block;" />
+          <img src="${iconPath}" alt="" class="pathadvisor-facility-img" style="width:22px;height:22px;display:block;" />
         </span>
         <span class="pathadvisor-lift-label" style="color:#a5c3f2;">${visibleLabel}</span>
       </div>`,
@@ -550,7 +584,7 @@ function createFacilityIcon({
     html: `
       <div class="pathadvisor-facility-marker" aria-label="${label}">
         <span class="pathadvisor-facility-badge" aria-hidden="true">
-          <img src="${iconPath}" alt="" class="pathadvisor-facility-img" style="width:32px;height:32px;display:block;" />
+          <img src="${iconPath}" alt="" class="pathadvisor-facility-img" style="width:22px;height:22px;display:block;" />
         </span>
       </div>`,
     iconSize: [0, 0],
@@ -670,10 +704,19 @@ function ViewportController({
       );
 
       if (footprint) {
-        map.fitBounds(featureBounds(footprint), {
-          padding: [84, 84],
-          maxZoom: 18.8,
-        });
+        const bounds = featureBounds(footprint);
+        const padding = L.point(84, 84);
+        const targetZoom = Math.min(map.getBoundsZoom(bounds, false, padding), 18.8);
+
+        if (targetZoom > map.getZoom()) {
+          map.fitBounds(bounds, {
+            padding: [84, 84],
+            maxZoom: 18.8,
+          });
+        } else {
+          map.panTo(bounds.getCenter(), { animate: true });
+        }
+
         return;
       }
     }
@@ -817,7 +860,41 @@ function FloorLayer({
   );
 }
 
-export function OSMMap({
+export function OSMMap(props: OSMMapProps) {
+  const [rotationReady, setRotationReady] = useState(false);
+  const [rotationEnabled, setRotationEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const leafletWindow = window as typeof window & { L?: typeof L };
+    leafletWindow.L = L;
+
+    void import("leaflet-rotate")
+      .then(() => {
+        if (!cancelled) {
+          setRotationEnabled(true);
+          setRotationReady(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRotationReady(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!rotationReady) {
+    return <div className="absolute inset-0 bg-[#d6e7f5]" />;
+  }
+
+  return <RotatableOSMMap {...props} rotationEnabled={rotationEnabled} />;
+}
+
+function RotatableOSMMap({
   bootstrap,
   floorData,
   interactionSource,
@@ -829,7 +906,8 @@ export function OSMMap({
   focusedSegmentId,
   onSelectBuilding,
   onSelectVenue,
-}: OSMMapProps) {
+  rotationEnabled,
+}: OSMMapProps & { rotationEnabled: boolean }) {
   const [zoomLevel, setZoomLevel] = useState(16);
   const [viewportBounds, setViewportBounds] = useState<MapBoundsTuple | null>(null);
   const [autoFloorDataByBuilding, setAutoFloorDataByBuilding] = useState<
@@ -1122,7 +1200,7 @@ export function OSMMap({
     });
 
     const maxLabels =
-      zoomLevel >= 20
+      zoomLevel >= LABEL_COLLISION_FREE_ZOOM
         ? Number.POSITIVE_INFINITY
         : zoomLevel >= 19.4
           ? 220
@@ -1140,17 +1218,43 @@ export function OSMMap({
         labelPriority(left.properties, left.geometry),
     );
 
-    const selectedFeatures =
+    const cappedFeatures =
       maxLabels === Number.POSITIVE_INFINITY
         ? sortedFeatures
         : sortedFeatures.slice(0, maxLabels);
 
-    return selectedFeatures.map((feature) => {
-      return {
+    if (zoomLevel >= LABEL_COLLISION_FREE_ZOOM) {
+      return cappedFeatures.map((feature) => ({
         id: feature.dedupeKey,
         center: labelPointWithinGeometry(feature.geometry),
         label: feature.properties.name,
-      };
+      }));
+    }
+
+    const occupiedLabelBoxes: LabelCollisionBox[] = [];
+
+    return cappedFeatures.flatMap((feature) => {
+      const center = labelPointWithinGeometry(feature.geometry);
+      const label = feature.properties.name;
+      const collisionBox = labelCollisionBox(center, label, zoomLevel);
+
+      if (
+        occupiedLabelBoxes.some((occupiedBox) =>
+          collisionBoxesOverlap(occupiedBox, collisionBox),
+        )
+      ) {
+        return [];
+      }
+
+      occupiedLabelBoxes.push(collisionBox);
+
+      return [
+        {
+          id: feature.dedupeKey,
+          center,
+          label,
+        },
+      ];
     });
   }, [autoFloorLayers, floorData, zoomLevel]);
 
@@ -1160,6 +1264,10 @@ export function OSMMap({
         center={HKUST_CENTER}
         zoom={16}
         maxZoom={22}
+        rotate={rotationEnabled}
+        touchRotate={rotationEnabled}
+        rotateControl={false}
+        shiftKeyRotate={false}
         zoomControl={false}
         attributionControl
         className="h-full w-full"
