@@ -24,8 +24,8 @@ import {
 } from "@/lib/pathadvisor";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 
-const OSMMap = dynamic(
-  () => import("@/components/osm-map").then((module) => module.OSMMap),
+const CampusMap = dynamic(
+  () => import("@/components/maplibre-map").then((module) => module.MapLibreMap),
   {
     ssr: false,
     loading: () => (
@@ -99,8 +99,8 @@ function placeLocationLabel(place: PlaceDetail) {
 
 function venueDisplayName(name: string, category?: string) {
   const normalizedName = name.trim();
-  const toiletCodePattern = /^\d{1,5}T$/i;
-  const verticalTransportCodePattern = /^(UG\d*|LG\d*|G\d*|B\d{1,2}|L\d{1,2}|\d{1,2})(ESC|SC)(\d{2,3})$/i;
+  const toiletCodePattern = /\d{1,5}T$/i;
+  const verticalTransportCodePattern = /^(UG\d*|LG\d*|G\d*|B\d{1,2}|L\d{1,2}|\d{1,2})(ESC|SC|STAIR)([A-Z]{0,4}\d{2,3}[A-Z]?)$/i;
   const verticalTransportMatch = normalizedName.match(verticalTransportCodePattern);
   const roomCodePattern = /^(?:(?:UG|LG|G)|(?:B|L)\d{1,2}|\d{1,2})\d{2,4}[A-Z]?$/i;
 
@@ -565,7 +565,7 @@ export function MapExperience() {
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-slate-950">
-      <OSMMap
+      <CampusMap
         bootstrap={bootstrap}
         floorData={floorData}
         focusedSegmentId={focusedSegmentId}
