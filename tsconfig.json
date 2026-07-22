@@ -20,7 +20,10 @@
     ],
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+    "types": [
+      "node", "geojson"
+    ]
   },
   "include": [
     "next-env.d.ts",
