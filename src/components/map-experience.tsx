@@ -622,7 +622,7 @@ export function MapExperience() {
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
                     placeholder="Search buildings or facilities"
-                    className="w-full border-0 bg-transparent text-[14px] font-medium outline-none placeholder:text-slate-400"
+                    className="w-full border-0 bg-transparent text-base font-medium outline-none placeholder:text-slate-400"
                   />
                 </div>
                 {(visibleSearchResults.length > 0 || searchError) && (
@@ -716,7 +716,7 @@ export function MapExperience() {
                             }}
                             placeholder={placeholder}
                             aria-label={placeholder}
-                            className={`min-w-0 max-w-[64%] border-0 bg-transparent text-[15px] font-medium text-slate-900 outline-none placeholder:text-slate-400 ${
+                            className={`min-w-0 max-w-[64%] border-0 bg-transparent text-base font-medium text-slate-900 outline-none placeholder:text-slate-400 ${
                               routePlace ? "flex-none" : "flex-1"
                             }`}
                           />

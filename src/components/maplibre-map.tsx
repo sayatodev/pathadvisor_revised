@@ -347,13 +347,21 @@ function liftCollection(floors: FloorData[]) {
   };
 }
 
-function labelCollection(floors: FloorData[]) {
+function labelCollection(
+  floors: FloorData[],
+  selectedLocationId?: string,
+  selectedPointOfInterestId?: string,
+) {
   const seen = new Set<string>();
 
   return {
     type: "FeatureCollection" as const,
     features: floors.flatMap((floor) =>
       floor.features.flatMap((feature) => {
+        const isSelected =
+          (Boolean(selectedLocationId) && feature.properties.locationId === selectedLocationId) ||
+          (Boolean(selectedPointOfInterestId) &&
+            feature.properties.pointOfInterestId === selectedPointOfInterestId);
         const name = feature.properties.name.trim();
         const dedupeKey =
           feature.properties.locationId ??
@@ -363,6 +371,7 @@ function labelCollection(floors: FloorData[]) {
 
         if (
           !name ||
+          isSelected ||
           FACILITY_ICONS[feature.properties.typeName] ||
           feature.properties.typeName === "Lift Shaft" ||
           seen.has(dedupeKey)
@@ -890,7 +899,10 @@ export function MapLibreMap(props: MapLibreMapProps) {
   );
   const facilitiesData = useMemo(() => facilityCollection(floorLayers), [floorLayers]);
   const liftsData = useMemo(() => liftCollection(floorLayers), [floorLayers]);
-  const labelsData = useMemo(() => labelCollection(floorLayers), [floorLayers]);
+  const labelsData = useMemo(
+    () => labelCollection(floorLayers, selectedLocationId, selectedPointOfInterestId),
+    [floorLayers, selectedLocationId, selectedPointOfInterestId],
+  );
   const focusedLabelData = useMemo(
     () => focusedLabelCollection(floorLayers, selectedLocationId, selectedPointOfInterestId),
     [floorLayers, selectedLocationId, selectedPointOfInterestId],
