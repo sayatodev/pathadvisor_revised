@@ -1,10 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { getPlaceDetail, type SearchPlace } from "@/lib/pathadvisor";
-import { directionsPath, mapTargetFromLocation, type MapRouteTarget, viewPath } from "@/lib/map-url";
+import { directionsPath, directionsTargetFromSearch, mapTargetFromLocation, type MapRouteTarget, viewPath } from "@/lib/map-url";
 import { MdiIcon, MdiMaskIcon, formatDistance, formatDuration, placeLocationLabel, venueDisplayName } from "./map-experience/display";
 import { routeTransitionSummary } from "./map/routes";
 import { useMapExperienceState } from "./map-experience/use-map-experience-state";
@@ -17,10 +17,15 @@ const CampusMap = dynamic(
 export function MapExperience({ target }: { target: MapRouteTarget }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const routeTarget = useMemo(
-    () => mapTargetFromLocation(pathname, searchParams, target),
-    [pathname, searchParams, target],
-  );
+  const [initialPathname] = useState(pathname);
+  const locationTarget = useMemo(() => mapTargetFromLocation(pathname, searchParams, target), [pathname, searchParams, target]);
+  const routeTarget = useMemo(() => {
+    if (pathname !== initialPathname) {
+      return locationTarget;
+    }
+
+    return target.kind === "directions" ? directionsTargetFromSearch(target, searchParams) : target;
+  }, [initialPathname, locationTarget, pathname, searchParams, target]);
   const handleInvalidTarget = useCallback(() => {
     window.location.replace("/");
   }, []);

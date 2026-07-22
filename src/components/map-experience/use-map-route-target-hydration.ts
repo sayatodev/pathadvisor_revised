@@ -40,11 +40,15 @@ type RouteTargetHydrationOptions = {
 };
 
 function searchPlaceFromDetail(detail: PlaceDetail): SearchPlace {
+  const subtitle = detail.isBuilding
+    ? "Building"
+    : [detail.buildingName, detail.floorName].filter(Boolean).join(" • ") || "Venue";
+
   return {
     id: detail.id,
     kind: detail.kind,
     name: detail.name,
-    subtitle: detail.isBuilding ? "Building" : detail.floorName ?? "Venue",
+    subtitle,
     category: detail.description || undefined,
     description: detail.description,
     buildingId: detail.buildingId,
@@ -112,7 +116,7 @@ export function useMapRouteTargetHydration({
   );
 
   useEffect(() => {
-    if (!bootstrap || appliedTargetKeyRef.current === targetKey) {
+    if ((target.kind !== "directions" && !bootstrap) || appliedTargetKeyRef.current === targetKey) {
       return;
     }
 
@@ -176,6 +180,9 @@ export function useMapRouteTargetHydration({
         clearRouteState();
 
         if (!target.placeId) {
+          if (!currentBootstrap) {
+            return;
+          }
           const building = currentBootstrap.buildings.find((entry) => entry.id === target.buildingId);
           if (!building) {
             invalidateTarget();
