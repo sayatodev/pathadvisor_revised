@@ -45,6 +45,50 @@ input {
   display: none;
 }
 
+.pathadvisor-route-transition-chip {
+  align-items: center;
+  background: #3d5181;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 6px;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.28);
+  color: #ffffff;
+  display: flex;
+  font-family: var(--font-geist-sans), sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 5px;
+  line-height: 1;
+  padding: 6px 8px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.pathadvisor-route-transition-chip--compact {
+  transform: scale(0.78);
+  transform-origin: center;
+}
+
+.pathadvisor-route-transition-chip__icon {
+  display: block;
+  height: 16px;
+  object-fit: contain;
+  width: 16px;
+}
+
+.pathadvisor-route-transition-chip__divider {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.pathadvisor-route-transition-chip__lift {
+  padding-right: 2px;
+}
+
+.pathadvisor-route-transition-chip__arrow {
+  filter: brightness(0) invert(1);
+  height: 15px;
+  width: 15px;
+}
+
 .leaflet-container {
   width: 100%;
   height: 100%;

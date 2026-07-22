@@ -23,6 +23,7 @@ import {
   type SearchPlace,
 } from "@/lib/pathadvisor";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
+import { formatCampusAreaName } from "@/lib/venue-display";
 
 const CampusMap = dynamic(
   () => import("@/components/maplibre-map").then((module) => module.MapLibreMap),
@@ -111,10 +112,15 @@ function placeLocationLabel(place: PlaceDetail) {
 
 function venueDisplayName(name: string, category?: string) {
   const normalizedName = name.trim();
+  const campusAreaName = formatCampusAreaName(normalizedName);
   const toiletCodePattern = /\d{1,5}T$/i;
   const verticalTransportCodePattern = /^(UG\d*|LG\d*|G\d*|B\d{1,2}|L\d{1,2}|\d{1,2})(ESC|SC|STAIR)([A-Z]{0,4}\d{2,3}[A-Z]?)$/i;
   const verticalTransportMatch = normalizedName.match(verticalTransportCodePattern);
   const roomCodePattern = /^(?:(?:UG|LG|G)|(?:B|L)\d{1,2}|\d{1,2})\d{2,4}[A-Z]?$/i;
+
+  if (campusAreaName) {
+    return campusAreaName;
+  }
 
   if (toiletCodePattern.test(normalizedName)) {
     const normalizedCategory = category?.toLowerCase() ?? "";
