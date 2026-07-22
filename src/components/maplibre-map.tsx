@@ -29,6 +29,7 @@ const SOURCE_IDS = {
   lifts: "lifts",
   facilities: "facilities",
   labels: "venue-labels",
+  focusedLabel: "focused-venue-label",
   routes: "routes",
 } as const;
 
@@ -44,6 +45,7 @@ const LAYER_IDS = {
   liftIcons: "lift-icons",
   facilityIcons: "facility-icons",
   venueLabels: "venue-labels",
+  focusedVenueLabel: "focused-venue-label",
 } as const;
 
 const FACILITY_ICONS: Record<string, string> = {
@@ -212,8 +214,9 @@ function floorCollection(
           isPathwayLikeFeature(feature.properties) ? "#ffffff" : "#d1d5db",
         );
         const isSelected =
-          feature.properties.locationId === selectedLocationId ||
-          feature.properties.pointOfInterestId === selectedPointOfInterestId;
+          (Boolean(selectedLocationId) && feature.properties.locationId === selectedLocationId) ||
+          (Boolean(selectedPointOfInterestId) &&
+            feature.properties.pointOfInterestId === selectedPointOfInterestId);
 
         return {
           type: "Feature" as const,
@@ -380,6 +383,46 @@ function labelCollection(floors: FloorData[]) {
   };
 }
 
+function focusedLabelCollection(
+  floors: FloorData[],
+  selectedLocationId?: string,
+  selectedPointOfInterestId?: string,
+) {
+  const seen = new Set<string>();
+
+  return {
+    type: "FeatureCollection" as const,
+    features: floors.flatMap((floor) =>
+      floor.features.flatMap((feature) => {
+        const isSelected =
+          (Boolean(selectedLocationId) && feature.properties.locationId === selectedLocationId) ||
+          (Boolean(selectedPointOfInterestId) &&
+            feature.properties.pointOfInterestId === selectedPointOfInterestId);
+        const name = feature.properties.name.trim();
+        const dedupeKey =
+          feature.properties.locationId ??
+          feature.properties.pointOfInterestId ??
+          `${floor.id}:${feature.id}`;
+
+        if (!isSelected || !name || seen.has(dedupeKey)) {
+          return [];
+        }
+
+        seen.add(dedupeKey);
+        const [lng, lat] = featureCenter(feature.geometry);
+        return [
+          {
+            type: "Feature" as const,
+            id: dedupeKey,
+            geometry: { type: "Point" as const, coordinates: [lng, lat] },
+            properties: { name },
+          },
+        ];
+      }),
+    ),
+  };
+}
+
 function routeCollection(routeData: RouteData | null, selectedFloorId: string | null) {
   return {
     type: "FeatureCollection" as const,
@@ -464,6 +507,26 @@ async function loadFacilityImages(map: MapLibreInstance) {
         "icon-size": 0.385,
         "icon-allow-overlap": true,
         "icon-ignore-placement": true,
+      },
+    });
+  }
+
+  if (!map.getLayer(LAYER_IDS.focusedVenueLabel)) {
+    map.addLayer({
+      id: LAYER_IDS.focusedVenueLabel,
+      type: "symbol",
+      source: SOURCE_IDS.focusedLabel,
+      layout: {
+        "text-field": ["get", "name"],
+        "text-font": ["Open Sans Semibold"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 0, 12, 20, 15],
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+      },
+      paint: {
+        "text-color": "#f2a5bd",
+        "text-halo-color": "#000000",
+        "text-halo-width": 1.1,
       },
     });
   }
@@ -806,6 +869,10 @@ export function MapLibreMap(props: MapLibreMapProps) {
   const facilitiesData = useMemo(() => facilityCollection(floorLayers), [floorLayers]);
   const liftsData = useMemo(() => liftCollection(floorLayers), [floorLayers]);
   const labelsData = useMemo(() => labelCollection(floorLayers), [floorLayers]);
+  const focusedLabelData = useMemo(
+    () => focusedLabelCollection(floorLayers, selectedLocationId, selectedPointOfInterestId),
+    [floorLayers, selectedLocationId, selectedPointOfInterestId],
+  );
   const routesData = useMemo(
     () => routeCollection(props.routeData, props.selectedFloorId),
     [props.routeData, props.selectedFloorId],
@@ -820,8 +887,19 @@ export function MapLibreMap(props: MapLibreMapProps) {
     setSourceData(map, SOURCE_IDS.lifts, liftsData);
     setSourceData(map, SOURCE_IDS.facilities, facilitiesData);
     setSourceData(map, SOURCE_IDS.labels, labelsData);
+    setSourceData(map, SOURCE_IDS.focusedLabel, focusedLabelData);
     setSourceData(map, SOURCE_IDS.routes, routesData);
-  }, [autoFloorData, campusData, facilitiesData, labelsData, liftsData, mapReady, routesData, selectedFloorData]);
+  }, [
+    autoFloorData,
+    campusData,
+    facilitiesData,
+    focusedLabelData,
+    labelsData,
+    liftsData,
+    mapReady,
+    routesData,
+    selectedFloorData,
+  ]);
 
   useEffect(() => {
     const map = mapRef.current;
