@@ -87,6 +87,18 @@ function floorChipLabel(floor: BuildingFloorSummary) {
   return floor.name === "G" ? "G" : floor.name;
 }
 
+const BUILDING_CHIP_LABELS: Record<string, string> = {
+  "Academic Building": "Academic Bldg.",
+  "Cheng Yu Tung Building": "CYT Bldg.",
+  "HKUST Jockey Club Institute for Advanced Study/Lo Ka Chung Building": "IAS / LKC Bldg.",
+  "Lee Shau Kee Business Building": "LSK Bldg.",
+  "Martin Ka Shing Lee Innovation Building": "MKS Lee Innovation Bldg.",
+};
+
+function buildingChipLabel(name: string) {
+  return BUILDING_CHIP_LABELS[name] ?? name.replace(/Building$/, "Bldg.");
+}
+
 function placeLocationLabel(place: PlaceDetail) {
   const floor = place.floorName
     ? place.floorName.startsWith("Floor ")
@@ -307,7 +319,9 @@ export function MapExperience() {
     }
 
     if (selectedPlace) {
-      return placeDetail?.buildingId ?? null;
+      return selectedPlace.kind === "building"
+        ? selectedPlace.id
+        : selectedPlace.buildingId ?? placeDetail?.buildingId ?? null;
     }
 
     return activeAutoVisibleBuildingFloors.length > 0 ? autoVisibleBuildingId : null;
@@ -318,6 +332,22 @@ export function MapExperience() {
     routeMode,
     selectedPlace,
   ]);
+
+  const focusedBuildingName = useMemo(() => {
+    if (!focusedBuildingId || routeMode) {
+      return null;
+    }
+
+    const building = bootstrap?.buildings.find((entry) => entry.id === focusedBuildingId);
+    const name =
+      (selectedPlace?.kind === "building" && selectedPlace.id === focusedBuildingId
+        ? selectedPlace.name
+        : undefined) ??
+      (placeDetail?.buildingId === focusedBuildingId ? placeDetail.buildingName : undefined) ??
+      building?.name;
+
+    return name ? buildingChipLabel(name) : null;
+  }, [bootstrap?.buildings, focusedBuildingId, placeDetail?.buildingId, placeDetail?.buildingName, routeMode, selectedPlace]);
 
   useEffect(() => {
     if (!focusedBuildingId) {
@@ -568,6 +598,7 @@ export function MapExperience() {
       <CampusMap
         bootstrap={bootstrap}
         floorData={floorData}
+        focusedBuildingId={focusedBuildingId}
         focusedSegmentId={focusedSegmentId}
         isFloorSelectorVisible={floorOptions.length > 0 && Boolean(currentFloorOption)}
         onAutoVisibleBuildingChange={setAutoVisibleBuildingId}
@@ -768,6 +799,13 @@ export function MapExperience() {
         </header>
 
         <section className="pointer-events-auto absolute inset-x-0 bottom-0 z-[550]">
+          {focusedBuildingName ? (
+            <div className="pointer-events-none absolute bottom-full left-1/2 mb-3 max-w-[calc(100vw-2rem)] -translate-x-1/2">
+              <div className="truncate rounded-lg border-2 border-slate-950 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-[0_8px_18px_rgba(15,23,42,0.14)]">
+                {focusedBuildingName}
+              </div>
+            </div>
+          ) : null}
           <div className="relative mx-auto w-full max-w-3xl rounded-t-[1.75rem] border-x-2 border-t-2 border-slate-950 bg-white px-4 pb-5 pt-3 text-slate-900 shadow-[0_-12px_28px_rgba(15,23,42,0.18)]">
             {floorOptions.length > 0 && currentFloorOption ? (
               <div className="pointer-events-auto absolute bottom-full left-4 mb-3 sm:left-6">

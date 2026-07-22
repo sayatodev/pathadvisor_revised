@@ -21,6 +21,7 @@ const AUTO_FLOOR_MIN_ZOOM = 16.5;
 const MAX_AUTO_BUILDINGS = 6;
 const BUILDING_FLOOR_FOCUS_ZOOM = 18.8;
 const VENUE_FOCUS_ZOOM = 19.2;
+const MAP_TAP_MIN_FOCUS_ZOOM = 17;
 
 const SOURCE_IDS = {
   campus: "campus-footprints",
@@ -86,6 +87,7 @@ type FloorFeatureProperties = FloorData["features"][number]["properties"];
 type MapLibreMapProps = {
   bootstrap: CampusBootstrap | null;
   floorData: FloorData | null;
+  focusedBuildingId: string | null;
   isFloorSelectorVisible: boolean;
   onAutoVisibleBuildingChange: (buildingId: string | null) => void;
   routeData: RouteData | null;
@@ -535,6 +537,11 @@ async function loadFacilityImages(map: MapLibreInstance) {
 export function MapLibreMap(props: MapLibreMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreInstance | null>(null);
+  const focusedBuildingIdRef = useRef<string | null>(props.focusedBuildingId);
+  const preserveZoomForMapSelectionRef = useRef<{
+    id: string;
+    bounds: [[number, number], [number, number]] | null;
+  } | null>(null);
   const { onAutoVisibleBuildingChange } = props;
   const callbacksRef = useRef({
     onSelectBuilding: props.onSelectBuilding,
@@ -551,6 +558,10 @@ export function MapLibreMap(props: MapLibreMapProps) {
       onSelectVenue: props.onSelectVenue,
     };
   }, [props.onSelectBuilding, props.onSelectVenue]);
+
+  useEffect(() => {
+    focusedBuildingIdRef.current = props.focusedBuildingId;
+  }, [props.focusedBuildingId]);
 
   const resolvedPlaceDetail =
     props.placeDetail?.id === props.selectedPlace?.id ? props.placeDetail : null;
@@ -738,7 +749,11 @@ export function MapLibreMap(props: MapLibreMapProps) {
         const feature = event.features?.[0] as MapGeoJSONFeature | undefined;
         const buildingId = feature?.properties?.buildingId;
         const name = feature?.properties?.name;
-        if (typeof buildingId === "string" && typeof name === "string") {
+        if (
+          typeof buildingId === "string" &&
+          typeof name === "string" &&
+          buildingId !== focusedBuildingIdRef.current
+        ) {
           callbacksRef.current.onSelectBuilding(buildingId, name);
         }
       };
@@ -747,8 +762,14 @@ export function MapLibreMap(props: MapLibreMapProps) {
         const properties = feature?.properties;
         const locationId = properties?.locationId;
         const pointOfInterestId = properties?.pointOfInterestId;
+        const geometry = feature?.geometry;
+        const bounds =
+          geometry && (geometry.type === "Polygon" || geometry.type === "MultiPolygon")
+            ? boundsForGeometry(geometry)
+            : null;
 
         if (typeof locationId === "string") {
+          preserveZoomForMapSelectionRef.current = { id: locationId, bounds };
           callbacksRef.current.onSelectVenue({
             id: locationId,
             kind: "location",
@@ -756,6 +777,7 @@ export function MapLibreMap(props: MapLibreMapProps) {
             subtitle: typeof properties?.typeName === "string" ? properties.typeName : "Location",
           });
         } else if (typeof pointOfInterestId === "string") {
+          preserveZoomForMapSelectionRef.current = { id: pointOfInterestId, bounds };
           callbacksRef.current.onSelectVenue({
             id: pointOfInterestId,
             kind: "point_of_interest",
@@ -931,6 +953,33 @@ export function MapLibreMap(props: MapLibreMapProps) {
     }
 
     if (resolvedPlaceDetail?.coordinates) {
+      const mapSelection = preserveZoomForMapSelectionRef.current;
+      if (mapSelection && mapSelection.id === props.selectedPlace?.id) {
+        const selectionBounds = mapSelection.bounds;
+        preserveZoomForMapSelectionRef.current = null;
+
+        const currentZoom = map.getZoom();
+        const fitZoom = selectionBounds
+          ? map.cameraForBounds(selectionBounds, { padding: 72 })?.zoom
+          : undefined;
+        const targetZoom =
+          currentZoom < MAP_TAP_MIN_FOCUS_ZOOM
+            ? MAP_TAP_MIN_FOCUS_ZOOM
+            : fitZoom !== undefined && currentZoom > fitZoom
+              ? fitZoom
+              : null;
+
+        if (targetZoom !== null) {
+          map.flyTo({
+            center: [resolvedPlaceDetail.coordinates[1], resolvedPlaceDetail.coordinates[0]],
+            zoom: targetZoom,
+            duration: 700,
+          });
+        }
+
+        return;
+      }
+
       map.flyTo({
         center: [resolvedPlaceDetail.coordinates[1], resolvedPlaceDetail.coordinates[0]],
         zoom: Math.max(map.getZoom(), VENUE_FOCUS_ZOOM),
