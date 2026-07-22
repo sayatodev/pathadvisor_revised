@@ -114,15 +114,15 @@ export function useMapRouteTargetHydration({
         : JSON.stringify(target),
     [target],
   );
+  const targetBootstrap = target.kind === "view" ? bootstrap : null;
 
   useEffect(() => {
-    if ((target.kind !== "directions" && !bootstrap) || appliedTargetKeyRef.current === targetKey) {
+    if ((target.kind === "view" && !targetBootstrap) || appliedTargetKeyRef.current === targetKey) {
       return;
     }
 
-    appliedTargetKeyRef.current = targetKey;
     const request = ++routeTargetRequestRef.current;
-    const currentBootstrap = bootstrap;
+    const currentBootstrap = targetBootstrap;
     let cancelled = false;
 
     function isCurrentRequest() {
@@ -132,6 +132,12 @@ export function useMapRouteTargetHydration({
     function invalidateTarget() {
       if (isCurrentRequest()) {
         onInvalidTarget();
+      }
+    }
+
+    function markTargetApplied() {
+      if (isCurrentRequest()) {
+        appliedTargetKeyRef.current = targetKey;
       }
     }
 
@@ -155,6 +161,7 @@ export function useMapRouteTargetHydration({
         setSelectedFloorId(null);
         setSearchQuery("");
         setSearchCandidatesVisible(false);
+        markTargetApplied();
         return;
       }
 
@@ -166,6 +173,7 @@ export function useMapRouteTargetHydration({
           if (target.floorId) {
             setSelectedFloorId(target.floorId);
           }
+          markTargetApplied();
           return;
         }
 
@@ -174,6 +182,7 @@ export function useMapRouteTargetHydration({
           if (target.floorId) {
             setSelectedFloorId(target.floorId);
           }
+          markTargetApplied();
           return;
         }
 
@@ -215,6 +224,7 @@ export function useMapRouteTargetHydration({
               setPlaceDetail(null);
             }
             setSelectedPlace(building);
+            markTargetApplied();
           }
           return;
         }
@@ -238,6 +248,7 @@ export function useMapRouteTargetHydration({
           setSelectedPlace(searchPlaceFromDetail(detail));
           setPlaceDetail(detail);
           setSelectedFloorId(resolvedFloorId(detail.floors, target.floorId, detail.floorId ?? detail.defaultFloorId));
+          markTargetApplied();
         } catch {
           if (isCurrentRequest()) {
             invalidateTarget();
@@ -247,6 +258,7 @@ export function useMapRouteTargetHydration({
       }
 
       if (routeMode && routeDraft.start?.id === target.fromId && routeDraft.end?.id === target.toId) {
+        markTargetApplied();
         return;
       }
 
@@ -280,6 +292,7 @@ export function useMapRouteTargetHydration({
         setSelectedPlace(to);
         setPlaceDetail(toDetail);
         setSelectedFloorId(toDetail ? resolvedFloorId(toDetail.floors, target.floorId, toDetail.floorId ?? toDetail.defaultFloorId) : null);
+        markTargetApplied();
       } catch {
         if (isCurrentRequest()) {
           invalidateTarget();
@@ -293,7 +306,7 @@ export function useMapRouteTargetHydration({
       cancelled = true;
     };
   }, [
-    bootstrap,
+    targetBootstrap,
     preferredFloorSelectionRef,
     routeDraft.end?.id,
     routeDraft.start?.id,
