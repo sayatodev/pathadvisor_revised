@@ -141,13 +141,19 @@ function venueDisplayName(name: string, category?: string) {
     : normalizedName;
 }
 
+type FloorOption = {
+  id: string;
+  label: string;
+  elevation?: number | null;
+};
+
 function routeFloorOptions(routeData: RouteData | null) {
   if (!routeData) {
     return [];
   }
 
   const seen = new Set<string>();
-  const options: Array<{ id: string; label: string }> = [];
+  const options: FloorOption[] = [];
 
   for (const segment of routeData.segments) {
     if (!segment.floorId || segment.locationLabel.includes("Outdoor") || seen.has(segment.floorId)) {
@@ -190,11 +196,13 @@ export function MapExperience() {
   const [focusedSegmentId, setFocusedSegmentId] = useState<string | null>(null);
   const [venueFocusRequest, setVenueFocusRequest] = useState(0);
   const [floorMenuOpen, setFloorMenuOpen] = useState(false);
+  const [floorStepFeedback, setFloorStepFeedback] = useState<"up" | "down" | null>(null);
   const [autoVisibleBuildingId, setAutoVisibleBuildingId] = useState<string | null>(null);
   const [autoVisibleBuildingFloors, setAutoVisibleBuildingFloors] = useState<
     BuildingFloorSummary[]
   >([]);
   const preferredFloorSelectionRef = useRef<string | null>(null);
+  const floorStepFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const routeInputRefs = useRef<Partial<Record<"start" | "end", HTMLInputElement | null>>>({});
 
   const debouncedSearchQuery = useDebouncedValue(searchQuery, 220);
@@ -371,6 +379,15 @@ export function MapExperience() {
       });
   }, [selectedFloorId]);
 
+  useEffect(
+    () => () => {
+      if (floorStepFeedbackTimeoutRef.current) {
+        clearTimeout(floorStepFeedbackTimeoutRef.current);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     if (routeMode) {
       return;
@@ -453,7 +470,7 @@ export function MapExperience() {
   const effectiveRouteData =
     routeMode && routeStart && routeEnd ? routeData : null;
 
-  const floorOptions = useMemo(() => {
+  const floorOptions = useMemo<FloorOption[]>(() => {
     if (routeMode && routeData) {
       return routeFloorOptions(routeData).map((option) => ({
         id: option.id,
@@ -465,6 +482,7 @@ export function MapExperience() {
       return activeAutoVisibleBuildingFloors.map((floor) => ({
         id: floor.id,
         label: floorChipLabel(floor),
+        elevation: floor.elevation,
       }));
     }
 
@@ -473,11 +491,30 @@ export function MapExperience() {
       .map((floor) => ({
         id: floor.id,
         label: floorChipLabel(floor),
+        elevation: floor.elevation,
       }));
   }, [activeAutoVisibleBuildingFloors, placeDetail?.floors, routeData, routeMode, selectedPlace]);
 
   const currentFloorOption =
     floorOptions.find((floor) => floor.id === selectedFloorId) ?? floorOptions[0] ?? null;
+  const floorNavigationOptions = useMemo(() => {
+    if (!floorOptions.some((floor) => floor.elevation !== undefined && floor.elevation !== null)) {
+      return floorOptions;
+    }
+
+    return [...floorOptions].sort(
+      (left, right) => (left.elevation ?? Number.NEGATIVE_INFINITY) - (right.elevation ?? Number.NEGATIVE_INFINITY),
+    );
+  }, [floorOptions]);
+  const currentFloorNavigationIndex = floorNavigationOptions.findIndex(
+    (floor) => floor.id === currentFloorOption?.id,
+  );
+  const lowerFloorOption =
+    currentFloorNavigationIndex > 0 ? floorNavigationOptions[currentFloorNavigationIndex - 1] : null;
+  const higherFloorOption =
+    currentFloorNavigationIndex >= 0 && currentFloorNavigationIndex < floorNavigationOptions.length - 1
+      ? floorNavigationOptions[currentFloorNavigationIndex + 1]
+      : null;
 
   function handleFloorSelect(floorId: string) {
     setFloorMenuOpen(false);
@@ -494,6 +531,19 @@ export function MapExperience() {
     }
 
     setSelectedFloorId(floorId);
+  }
+
+  function handleFloorStep(direction: "up" | "down", floorId: string) {
+    setFloorStepFeedback(direction);
+    if (floorStepFeedbackTimeoutRef.current) {
+      clearTimeout(floorStepFeedbackTimeoutRef.current);
+    }
+
+    floorStepFeedbackTimeoutRef.current = setTimeout(() => {
+      floorStepFeedbackTimeoutRef.current = null;
+      setFloorStepFeedback(null);
+    }, 130);
+    handleFloorSelect(floorId);
   }
 
   function selectPlace(place: SearchPlace) {
@@ -808,7 +858,8 @@ export function MapExperience() {
           ) : null}
           <div className="relative mx-auto w-full max-w-3xl rounded-t-[1.75rem] border-x-2 border-t-2 border-slate-950 bg-white px-4 pb-5 pt-3 text-slate-900 shadow-[0_-12px_28px_rgba(15,23,42,0.18)]">
             {floorOptions.length > 0 && currentFloorOption ? (
-              <div className="pointer-events-auto absolute bottom-full left-4 mb-3 sm:left-6">
+              <>
+                <div className="pointer-events-auto absolute bottom-full left-4 mb-3 sm:left-6">
                 <div className="flex flex-col-reverse items-start gap-2">
                   <button
                     type="button"
@@ -841,7 +892,37 @@ export function MapExperience() {
                     </div>
                   ) : null}
                 </div>
+                </div>
+              <div className="pointer-events-auto absolute bottom-full right-4 mb-3 sm:right-6">
+                <div className="overflow-hidden rounded-lg border-2 border-slate-950 bg-white text-slate-900 shadow-[0_8px_18px_rgba(15,23,42,0.14)]">
+                  <button
+                    type="button"
+                    aria-label="Go up one floor"
+                    title="Go up one floor"
+                    disabled={!higherFloorOption}
+                    onClick={() => higherFloorOption && handleFloorStep("up", higherFloorOption.id)}
+                    className={`inline-flex h-10 w-10 items-center justify-center transition-colors duration-100 disabled:pointer-events-none disabled:opacity-45 ${
+                      floorStepFeedback === "up" ? "bg-slate-200" : "bg-white"
+                    }`}
+                  >
+                    <MdiIcon name="chevron-down" className="h-5 w-5 rotate-180" />
+                  </button>
+                  <div className="mx-2 h-px bg-slate-300" />
+                  <button
+                    type="button"
+                    aria-label="Go down one floor"
+                    title="Go down one floor"
+                    disabled={!lowerFloorOption}
+                    onClick={() => lowerFloorOption && handleFloorStep("down", lowerFloorOption.id)}
+                    className={`inline-flex h-10 w-10 items-center justify-center transition-colors duration-100 disabled:pointer-events-none disabled:opacity-45 ${
+                      floorStepFeedback === "down" ? "bg-slate-200" : "bg-white"
+                    }`}
+                  >
+                    <MdiIcon name="chevron-down" className="h-5 w-5" />
+                  </button>
+                </div>
               </div>
+              </>
             ) : null}
             <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-slate-300" />
             {loadingPlace ? (
