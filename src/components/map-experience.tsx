@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { getPlaceDetail, type SearchPlace } from "@/lib/pathadvisor";
 import { directionsPath, mapTargetFromLocation, type MapRouteTarget, viewPath } from "@/lib/map-url";
@@ -21,6 +21,9 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
     () => mapTargetFromLocation(pathname, searchParams, target),
     [pathname, searchParams, target],
   );
+  const handleInvalidTarget = useCallback(() => {
+    window.location.replace("/");
+  }, []);
   const {
     bootstrap, bootstrapError, selectedPlace, placeDetail, fetchedPlaceCategory, selectedFloorId, floorData,
     routeMode, routeDraft, routeInputs, activeRouteField, routeSearchResults, routeError, loadingDirections,
@@ -30,8 +33,8 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
     loadingPlace, selectPlace, selectBuildingFromMap, selectVenueFromMap,
     resetDirections, selectRouteResult, handleFloorSelect, handleFloorStep, activateDirections,
     setActiveRouteField, setRouteData, setRouteError, setRouteDraft, setRouteInputs, setSearchQuery,
-    setFloorMenuOpen, setFocusedSegmentId, setVenueFocusRequest, setAutoVisibleBuildingId, setSelectedFloorId,
-  } = useMapExperienceState(routeTarget);
+    setSearchCandidatesVisible, setFloorMenuOpen, setFocusedSegmentId, setVenueFocusRequest, setAutoVisibleBuildingId, setSelectedFloorId,
+  } = useMapExperienceState(routeTarget, handleInvalidTarget);
 
   const routeSteps = effectiveRouteData?.segments ?? [];
   const focusedRouteStepIndex = routeSteps.findIndex((segment) => segment.id === focusedSegmentId);
@@ -57,7 +60,7 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
       }
 
       if (detail.isBuilding) {
-        navigate(viewPath({ kind: "view", buildingId }));
+        navigate(viewPath({ kind: "view", searchLabel: detail.name, buildingId }));
         return;
       }
 
@@ -67,7 +70,7 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
         detail.floors.find((floor) => floor.isDefault && floor.showInPathAdvisor)?.id ??
         detail.floors.find((floor) => floor.showInPathAdvisor)?.id;
       if (floorId) {
-        navigate(viewPath({ kind: "view", buildingId, floorId, placeId: detail.id }));
+        navigate(viewPath({ kind: "view", searchLabel: detail.name, buildingId, floorId, placeId: detail.id }));
       }
     } catch {
       // Keep the current view when a click cannot be resolved by the upstream service.
@@ -77,7 +80,7 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
   function handlePlaceSelection(place: SearchPlace) {
     selectPlace(place);
     if (place.kind === "building") {
-      navigate(viewPath({ kind: "view", buildingId: place.id }));
+      navigate(viewPath({ kind: "view", searchLabel: place.name, buildingId: place.id }));
       return;
     }
 
@@ -100,6 +103,9 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
     if (buildingId) {
       navigate(viewPath({
         kind: "view",
+        searchLabel: routeTarget.kind === "view"
+          ? routeTarget.searchLabel
+          : searchQuery || selectedPlace?.name || bootstrap?.buildings.find((building) => building.id === buildingId)?.name || "Campus",
         buildingId,
         floorId,
         placeId: routeTarget.kind === "view" ? routeTarget.placeId : undefined,
@@ -110,7 +116,7 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
   function handleDirectionsActivation() {
     if (selectedPlace?.routeable) {
       activateDirections();
-      navigate(directionsPath({ kind: "directions", toId: selectedPlace.id }));
+      navigate(directionsPath({ kind: "directions", toName: selectedPlace.name, toId: selectedPlace.id }));
     }
   }
 
@@ -118,6 +124,8 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
     selectRouteResult(field, place);
     navigate(directionsPath({
       kind: "directions",
+      fromName: field === "start" ? place.name : routeDraft.start?.name,
+      toName: field === "end" ? place.name : routeDraft.end?.name,
       fromId: field === "start" ? place.id : routeDraft.start?.id,
       toId: field === "end" ? place.id : routeDraft.end?.id,
     }));
@@ -130,6 +138,8 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
     setRouteInputs((current) => ({ start: current.end, end: current.start }));
     navigate(directionsPath({
       kind: "directions",
+      fromName: routeDraft.end?.name,
+      toName: routeDraft.start?.name,
       fromId: routeDraft.end?.id,
       toId: routeDraft.start?.id,
     }));
@@ -176,7 +186,7 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
         onAutoVisibleBuildingChange={setAutoVisibleBuildingId}
         onSelectBuilding={(buildingId, name) => {
           selectBuildingFromMap(buildingId, name);
-          navigate(viewPath({ kind: "view", buildingId }));
+          navigate(viewPath({ kind: "view", searchLabel: name, buildingId }));
         }}
         onSelectVenue={(venue) => {
           selectVenueFromMap(venue);
@@ -198,7 +208,11 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
                   <MdiIcon name="magnify" className="h-5 w-5 shrink-0 opacity-65" />
                   <input
                     value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
+                    onFocus={() => setSearchCandidatesVisible(true)}
+                    onChange={(event) => {
+                      setSearchCandidatesVisible(true);
+                      setSearchQuery(event.target.value);
+                    }}
                     placeholder="Search buildings or facilities"
                     className="w-full border-0 bg-transparent text-base font-medium outline-none placeholder:text-slate-400"
                   />

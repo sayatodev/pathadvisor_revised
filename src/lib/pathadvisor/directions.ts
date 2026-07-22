@@ -3,15 +3,16 @@ import type { RouteData, RouteSegment } from "./types";
 import { asString, parseNumber } from "./utilities";
 
 type DirectionsResponse = {
+  meta?: { code?: number; message?: string };
   data: {
-    directions: {
+    directions?: {
       start_location_building_floor_id?: string;
       start_location_id: string;
       start: string;
       end: string;
       distance?: string;
       time?: string;
-      paths: Array<{
+      paths?: Array<{
         properties: { building_floor_id?: string; building_id?: string; start?: string; end?: string; distance?: string; time?: string; location?: string; info?: string };
         geometry: { coordinates: Array<[number, number] | string> };
       }>;
@@ -19,7 +20,9 @@ type DirectionsResponse = {
   };
 };
 
-function normalizeSegment(path: DirectionsResponse["data"]["directions"]["paths"][number], index: number): RouteSegment {
+type DirectionPath = NonNullable<NonNullable<DirectionsResponse["data"]["directions"]>["paths"]>[number];
+
+function normalizeSegment(path: DirectionPath, index: number): RouteSegment {
   const coordinates = (path.geometry.coordinates ?? [])
     .map((coordinate) => {
       const [lngValue, latValue] = typeof coordinate === "string" ? coordinate.trim().split(/\s+/) : coordinate;
@@ -51,6 +54,15 @@ export async function getDirections(params: { start: string; end: string; isWhee
     exclude_escalator: params.excludeEscalator ?? false,
   });
   const directions = response.data.directions;
+  if (!directions?.paths?.length) {
+    const message = response.meta?.message?.trim();
+    throw new Error(
+      !message || message.toLowerCase() === "path not found"
+        ? "No route could be found between these locations."
+        : message,
+    );
+  }
+
   return {
     startLabel: directions.start,
     endLabel: directions.end,

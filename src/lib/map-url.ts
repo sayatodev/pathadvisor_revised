@@ -1,7 +1,15 @@
 export type MapRouteTarget =
   | { kind: "browse" }
-  | { kind: "view"; buildingId: string; floorId?: string; placeId?: string }
-  | { kind: "directions"; fromId?: string; toId?: string; step?: number; floorId?: string };
+  | { kind: "view"; searchLabel: string; buildingId: string; floorId?: string; placeId?: string }
+  | {
+    kind: "directions";
+    fromName?: string;
+    toName?: string;
+    fromId?: string;
+    toId?: string;
+    step?: number;
+    floorId?: string;
+  };
 
 type DirectionsOptions = {
   step?: number;
@@ -9,7 +17,7 @@ type DirectionsOptions = {
 };
 
 function pathSegment(value: string) {
-  return encodeURIComponent(value);
+  return encodeURIComponent(value).replace(/%20/g, "+");
 }
 
 function queryString(values: Record<string, string | number | undefined>) {
@@ -26,7 +34,7 @@ function queryString(values: Record<string, string | number | undefined>) {
 }
 
 export function viewPath(target: Extract<MapRouteTarget, { kind: "view" }>) {
-  const segments = ["view", pathSegment(target.buildingId)];
+  const segments = ["view", pathSegment(target.searchLabel), pathSegment(target.buildingId)];
 
   if (target.floorId) {
     segments.push(pathSegment(target.floorId));
@@ -45,7 +53,7 @@ export function directionsPath(
   const options: DirectionsOptions = { step: target.step, floorId: target.floorId };
 
   if (target.fromId && target.toId) {
-    return `/directions/${pathSegment(target.fromId)}/${pathSegment(target.toId)}${queryString({
+    return `/directions/${pathSegment(target.fromName ?? target.fromId)}/${pathSegment(target.toName ?? target.toId)}/${pathSegment(target.fromId)}/${pathSegment(target.toId)}${queryString({
       step: options.step,
       floor: options.floorId,
     })}`;
@@ -96,7 +104,7 @@ export function directionsTargetFromSearch(
 
 function decodedSegment(value: string) {
   try {
-    return decodeURIComponent(value);
+    return decodeURIComponent(value.replace(/\+/g, "%20"));
   } catch {
     return null;
   }
@@ -113,9 +121,15 @@ export function mapTargetFromLocation(
   }
 
   if (segments[0] === "directions") {
-    if (segments.length === 3) {
+    if (segments.length === 5) {
       return directionsTargetFromSearch(
-        { kind: "directions", fromId: segments[1]!, toId: segments[2]! },
+        {
+          kind: "directions",
+          fromName: segments[1]!,
+          toName: segments[2]!,
+          fromId: segments[3]!,
+          toId: segments[4]!,
+        },
         searchParams,
       );
     }
@@ -125,12 +139,13 @@ export function mapTargetFromLocation(
     }
   }
 
-  if (segments[0] === "view" && segments.length >= 2 && segments.length <= 4) {
+  if (segments[0] === "view" && segments.length >= 3 && segments.length <= 5) {
     return {
       kind: "view",
-      buildingId: segments[1]!,
-      floorId: segments[2] ?? undefined,
-      placeId: segments[3] ?? undefined,
+      searchLabel: segments[1]!,
+      buildingId: segments[2]!,
+      floorId: segments[3] ?? undefined,
+      placeId: segments[4] ?? undefined,
     };
   }
 
