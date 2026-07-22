@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "PathAdvisor Revised",
-  description: "A fullscreen map-first HKUST campus navigator rebuilt with Next.js.",
+  description: "An unofficial version of HKUST Path Advisor that is actually usable on mobile devices.",
 };
 
 export const viewport: Viewport = {
