@@ -1002,5 +1002,5 @@ export function MapLibreMap(props: MapLibreMapProps) {
     }
   }, [mapReady, props.bootstrap, props.focusedSegmentId, props.routeData, props.selectedPlace, resolvedPlaceDetail, props.venueFocusRequest]);
 
-  return <div ref={containerRef} className="!absolute !inset-0" />;
+  return <div ref={containerRef} className="absolute! inset-0!" />;
 }

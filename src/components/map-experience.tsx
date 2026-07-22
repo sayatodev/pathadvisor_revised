@@ -29,7 +29,7 @@ const CampusMap = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="absolute inset-0 animate-pulse bg-[linear-gradient(180deg,_#d9e7f4_0%,_#ecf4fb_100%)]" />
+      <div className="absolute inset-0 animate-pulse bg-[linear-gradient(180deg,#d9e7f4_0%,#ecf4fb_100%)]" />
     ),
   },
 );
@@ -611,7 +611,7 @@ export function MapExperience() {
         venueFocusRequest={venueFocusRequest}
       />
 
-      <div className="pointer-events-none absolute inset-0 z-[500]">
+      <div className="pointer-events-none absolute inset-0 z-500">
         <header className="px-4 pt-4 sm:px-6 sm:pt-6">
           <section className="pointer-events-auto w-full max-w-lg rounded-[1.75rem] border-2 border-slate-950 bg-white px-1.5 py-1.5 text-slate-900 shadow-[0_16px_32px_rgba(15,23,42,0.18)] sm:mr-auto">
             {!routeMode ? (
@@ -673,7 +673,7 @@ export function MapExperience() {
                   </button>
 
                   <div className="relative min-w-0 flex-1 py-0.5">
-                    <span className="absolute bottom-1/2 left-[5px] top-1/2 w-px bg-slate-200" />
+                    <span className="absolute bottom-1/2 left-1.25 top-1/2 w-px bg-slate-200" />
                     {(["start", "end"] as const).map((field, index) => {
                       const routePlace = routeDraft[field];
                       const placeholder = field === "start" ? "Starting point" : "Destination";
@@ -798,7 +798,7 @@ export function MapExperience() {
           </section>
         </header>
 
-        <section className="pointer-events-auto absolute inset-x-0 bottom-0 z-[550]">
+        <section className="pointer-events-auto absolute inset-x-0 bottom-0 z-550">
           {focusedBuildingName ? (
             <div className="pointer-events-none absolute bottom-full left-1/2 mb-3 max-w-[calc(100vw-2rem)] -translate-x-1/2">
               <div className="truncate rounded-lg border-2 border-slate-950 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-[0_8px_18px_rgba(15,23,42,0.14)]">
