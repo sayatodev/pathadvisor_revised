@@ -19,10 +19,49 @@ import {
   type RouteData,
   type SearchPlace,
 } from "@/lib/pathadvisor";
+import type { MapRouteTarget } from "@/lib/map-url";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { buildingChipLabel, floorChipLabel, routeFloorOptions, type FloorOption, type RouteDraft } from "./display";
 
-export function useMapExperienceState() {
+function searchPlaceFromDetail(detail: PlaceDetail): SearchPlace {
+  return {
+    id: detail.id,
+    kind: detail.kind,
+    name: detail.name,
+    subtitle: detail.isBuilding ? "Building" : detail.floorName ?? "Venue",
+    category: detail.description || undefined,
+    description: detail.description,
+    buildingId: detail.buildingId,
+    buildingName: detail.buildingName,
+    floorId: detail.floorId,
+    floorName: detail.floorName,
+    routeable: detail.routeable,
+    remoteId: detail.remoteId,
+  };
+}
+
+function resolvedFloorId(
+  floors: BuildingFloorSummary[],
+  requestedFloorId: string | undefined,
+  fallbackFloorId: string | undefined,
+) {
+  if (requestedFloorId && floors.some((floor) => floor.id === requestedFloorId && floor.showInPathAdvisor)) {
+    return requestedFloorId;
+  }
+
+  if (fallbackFloorId && floors.some((floor) => floor.id === fallbackFloorId && floor.showInPathAdvisor)) {
+    return fallbackFloorId;
+  }
+
+  return (
+    floors.find((floor) => floor.isDefault && floor.showInPathAdvisor)?.id ??
+    floors.find((floor) => floor.showInPathAdvisor)?.id ??
+    floors[0]?.id ??
+    null
+  );
+}
+
+export function useMapExperienceState(target: MapRouteTarget) {
   const [bootstrap, setBootstrap] = useState<CampusBootstrap | null>(null);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<SearchPlace | null>(null);
@@ -56,6 +95,16 @@ export function useMapExperienceState() {
   const preferredFloorSelectionRef = useRef<string | null>(null);
   const floorStepFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const routeInputRefs = useRef<Partial<Record<"start" | "end", HTMLInputElement | null>>>({});
+  const appliedTargetKeyRef = useRef<string | null>(null);
+  const routeTargetRequestRef = useRef(0);
+
+  const targetKey = useMemo(
+    () =>
+      target.kind === "directions"
+        ? JSON.stringify({ kind: target.kind, fromId: target.fromId, toId: target.toId })
+        : JSON.stringify(target),
+    [target],
+  );
 
   const debouncedSearchQuery = useDebouncedValue(searchQuery, 220);
   const debouncedRouteQuery = useDebouncedValue(
@@ -79,7 +128,167 @@ export function useMapExperienceState() {
   }, []);
 
   useEffect(() => {
-    if (!selectedPlace) {
+    if (!bootstrap || appliedTargetKeyRef.current === targetKey) {
+      return;
+    }
+
+    appliedTargetKeyRef.current = targetKey;
+    const request = ++routeTargetRequestRef.current;
+    const currentBootstrap = bootstrap;
+    let cancelled = false;
+
+    function isCurrentRequest() {
+      return !cancelled && routeTargetRequestRef.current === request;
+    }
+
+    function clearRouteState() {
+      setRouteMode(false);
+      setRouteDraft({ start: null, end: null });
+      setRouteInputs({ start: "", end: "" });
+      setRouteSearchResults([]);
+      setRouteData(null);
+      setRouteError(null);
+      setFocusedSegmentId(null);
+    }
+
+    async function applyTarget() {
+      setSearchError(null);
+
+      if (target.kind === "browse") {
+        clearRouteState();
+        setSelectedPlace(null);
+        setPlaceDetail(null);
+        setSelectedFloorId(null);
+        return;
+      }
+
+      if (target.kind === "view") {
+        if (!target.placeId && selectedPlace?.kind === "building" && selectedPlace.id === target.buildingId) {
+          preferredFloorSelectionRef.current = target.floorId ?? null;
+          if (target.floorId) {
+            setSelectedFloorId(target.floorId);
+          }
+          return;
+        }
+
+        if (target.placeId && selectedPlace?.id === target.placeId) {
+          preferredFloorSelectionRef.current = target.floorId ?? null;
+          if (target.floorId) {
+            setSelectedFloorId(target.floorId);
+          }
+          return;
+        }
+
+        clearRouteState();
+
+        if (!target.placeId) {
+          const building = currentBootstrap.buildings.find((entry) => entry.id === target.buildingId);
+          if (!building) {
+            if (isCurrentRequest()) {
+              setSearchError("This building is no longer available.");
+              setSelectedPlace(null);
+              setPlaceDetail(null);
+            }
+            return;
+          }
+
+          if (isCurrentRequest()) {
+            preferredFloorSelectionRef.current = target.floorId ?? null;
+            setPlaceDetail(null);
+            setSelectedPlace(building);
+          }
+          return;
+        }
+
+        try {
+          const detail = await getPlaceDetail(target.placeId);
+          if (!isCurrentRequest()) {
+            return;
+          }
+
+          if (detail.buildingId !== target.buildingId) {
+            setSearchError("This venue does not belong to the requested building.");
+            setSelectedPlace(null);
+            setPlaceDetail(null);
+            return;
+          }
+
+          setSelectedPlace(searchPlaceFromDetail(detail));
+          setPlaceDetail(detail);
+          setSelectedFloorId(resolvedFloorId(detail.floors, target.floorId, detail.floorId ?? detail.defaultFloorId));
+        } catch (error: unknown) {
+          if (isCurrentRequest()) {
+            setSearchError(error instanceof Error ? error.message : "Failed to load venue.");
+            setSelectedPlace(null);
+            setPlaceDetail(null);
+          }
+        }
+        return;
+      }
+
+      if (
+        routeMode &&
+        routeDraft.start?.id === target.fromId &&
+        routeDraft.end?.id === target.toId
+      ) {
+        return;
+      }
+
+      clearRouteState();
+      setRouteMode(true);
+
+      try {
+        const [fromDetail, toDetail] = await Promise.all([
+          target.fromId ? getPlaceDetail(target.fromId) : Promise.resolve(null),
+          target.toId ? getPlaceDetail(target.toId) : Promise.resolve(null),
+        ]);
+        if (!isCurrentRequest()) {
+          return;
+        }
+
+        if ((fromDetail && !fromDetail.routeable) || (toDetail && !toDetail.routeable)) {
+          setRouteError("Directions are only available for routeable venues.");
+          return;
+        }
+
+        if (fromDetail?.id && fromDetail.id === toDetail?.id) {
+          setRouteError("Start and destination need to be different.");
+          return;
+        }
+
+        const from = fromDetail ? searchPlaceFromDetail(fromDetail) : null;
+        const to = toDetail ? searchPlaceFromDetail(toDetail) : null;
+        setRouteDraft({ start: from, end: to });
+        setRouteInputs({ start: from?.name ?? "", end: to?.name ?? "" });
+        setActiveRouteField(from ? (to ? null : "end") : "start");
+        setSelectedPlace(to);
+        setPlaceDetail(toDetail);
+        setSelectedFloorId(toDetail ? resolvedFloorId(toDetail.floors, target.floorId, toDetail.floorId ?? toDetail.defaultFloorId) : null);
+      } catch (error: unknown) {
+        if (isCurrentRequest()) {
+          setRouteError(error instanceof Error ? error.message : "Failed to load directions.");
+        }
+      }
+    }
+
+    void applyTarget();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    bootstrap,
+    routeDraft.end?.id,
+    routeDraft.start?.id,
+    routeMode,
+    selectedPlace?.id,
+    selectedPlace?.kind,
+    target,
+    targetKey,
+  ]);
+
+  useEffect(() => {
+    if (!selectedPlace || placeDetail?.id === selectedPlace.id) {
       return;
     }
 
@@ -91,11 +300,11 @@ export function useMapExperienceState() {
         const detail = await getPlaceDetail(selectedPlace.id);
         setPlaceDetail(detail);
         setSelectedFloorId(
-          preferredFloorSelectionRef.current ??
-            detail.floorId ??
-            detail.defaultFloorId ??
-            detail.floors[0]?.id ??
-            null,
+          resolvedFloorId(
+            detail.floors,
+            preferredFloorSelectionRef.current ?? undefined,
+            detail.floorId ?? detail.defaultFloorId,
+          ),
         );
         preferredFloorSelectionRef.current = null;
       } catch (error: unknown) {
@@ -106,7 +315,7 @@ export function useMapExperienceState() {
     };
 
     void loadPlace();
-  }, [selectedPlace]);
+  }, [placeDetail?.id, selectedPlace]);
 
   useEffect(() => {
     if (
@@ -311,6 +520,30 @@ export function useMapExperienceState() {
     void loadDirections();
   }, [routeEnd, routeMode, routeStart]);
 
+  useEffect(() => {
+    if (target.kind !== "directions" || !target.fromId || !target.toId || !routeData) {
+      return;
+    }
+
+    const routeStepIndex = Math.min(Math.max((target.step ?? 1) - 1, 0), routeData.segments.length - 1);
+    const segment = routeData.segments[routeStepIndex];
+    if (!segment) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      setFocusedSegmentId(segment.id);
+      const selectedRouteFloor = target.floorId && routeData.segments.some((entry) => entry.floorId === target.floorId)
+        ? target.floorId
+        : segment.floorId ?? routeData.startFloorId ?? null;
+      setSelectedFloorId(selectedRouteFloor);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [routeData, target]);
+
   const visibleSearchResults = useMemo(() => {
     if (routeMode) {
       return routeSearchResults;
@@ -400,6 +633,7 @@ export function useMapExperienceState() {
 
   function selectPlace(place: SearchPlace) {
     setSelectedPlace(place);
+    setPlaceDetail(null);
     setSearchQuery("");
     setSearchResults([]);
     setSearchError(null);
@@ -485,6 +719,7 @@ export function useMapExperienceState() {
 
     if (field === "end") {
       setSelectedPlace(place);
+      setPlaceDetail(null);
     }
   }
   return {

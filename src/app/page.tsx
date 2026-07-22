@@ -1,5 +1,5 @@
-import { MapExperience } from "@/components/map-experience";
+import { MapExperiencePage } from "@/components/map-experience-page";
 
 export default function Home() {
-  return <MapExperience />;
+  return <MapExperiencePage target={{ kind: "browse" }} />;
 }

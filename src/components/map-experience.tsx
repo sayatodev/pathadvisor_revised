@@ -1,6 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useMemo } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { getPlaceDetail, type SearchPlace } from "@/lib/pathadvisor";
+import { directionsPath, mapTargetFromLocation, type MapRouteTarget, viewPath } from "@/lib/map-url";
 import { MdiIcon, MdiMaskIcon, formatDistance, formatDuration, placeLocationLabel, venueDisplayName } from "./map-experience/display";
 import { routeTransitionSummary } from "./map/routes";
 import { useMapExperienceState } from "./map-experience/use-map-experience-state";
@@ -10,7 +14,13 @@ const CampusMap = dynamic(
   { ssr: false, loading: () => <div className="absolute inset-0 animate-pulse bg-[linear-gradient(180deg,#d9e7f4_0%,#ecf4fb_100%)]" /> },
 );
 
-export function MapExperience() {
+export function MapExperience({ target }: { target: MapRouteTarget }) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const routeTarget = useMemo(
+    () => mapTargetFromLocation(pathname, searchParams, target),
+    [pathname, searchParams, target],
+  );
   const {
     bootstrap, bootstrapError, selectedPlace, placeDetail, fetchedPlaceCategory, selectedFloorId, floorData,
     routeMode, routeDraft, routeInputs, activeRouteField, routeSearchResults, routeError, loadingDirections,
@@ -21,7 +31,7 @@ export function MapExperience() {
     resetDirections, selectRouteResult, handleFloorSelect, handleFloorStep, activateDirections,
     setActiveRouteField, setRouteData, setRouteError, setRouteDraft, setRouteInputs, setSearchQuery,
     setFloorMenuOpen, setFocusedSegmentId, setVenueFocusRequest, setAutoVisibleBuildingId, setSelectedFloorId,
-  } = useMapExperienceState();
+  } = useMapExperienceState(routeTarget);
 
   const routeSteps = effectiveRouteData?.segments ?? [];
   const focusedRouteStepIndex = routeSteps.findIndex((segment) => segment.id === focusedSegmentId);
@@ -34,6 +44,107 @@ export function MapExperience() {
       : undefined;
   const drawerCategory = selectedPlace?.category || resolvedFetchedCategory;
 
+  function navigate(href: string) {
+    window.history.pushState(null, "", href);
+  }
+
+  async function navigateToPlaceId(placeId: string) {
+    try {
+      const detail = await getPlaceDetail(placeId);
+      const buildingId = detail.buildingId ?? (detail.isBuilding ? detail.id : undefined);
+      if (!buildingId) {
+        return;
+      }
+
+      if (detail.isBuilding) {
+        navigate(viewPath({ kind: "view", buildingId }));
+        return;
+      }
+
+      const floorId =
+        detail.floorId ??
+        detail.defaultFloorId ??
+        detail.floors.find((floor) => floor.isDefault && floor.showInPathAdvisor)?.id ??
+        detail.floors.find((floor) => floor.showInPathAdvisor)?.id;
+      if (floorId) {
+        navigate(viewPath({ kind: "view", buildingId, floorId, placeId: detail.id }));
+      }
+    } catch {
+      // Keep the current view when a click cannot be resolved by the upstream service.
+    }
+  }
+
+  function handlePlaceSelection(place: SearchPlace) {
+    selectPlace(place);
+    if (place.kind === "building") {
+      navigate(viewPath({ kind: "view", buildingId: place.id }));
+      return;
+    }
+
+    void navigateToPlaceId(place.id);
+  }
+
+  function handleFloorNavigation(floorId: string, direction?: "up" | "down") {
+    if (direction) {
+      handleFloorStep(direction, floorId);
+    } else {
+      handleFloorSelect(floorId);
+    }
+
+    if (routeTarget.kind === "directions" && routeTarget.fromId && routeTarget.toId) {
+      window.history.pushState(null, "", directionsPath({ ...routeTarget, floorId }));
+      return;
+    }
+
+    const buildingId = routeTarget.kind === "view" ? routeTarget.buildingId : focusedBuildingId;
+    if (buildingId) {
+      navigate(viewPath({
+        kind: "view",
+        buildingId,
+        floorId,
+        placeId: routeTarget.kind === "view" ? routeTarget.placeId : undefined,
+      }));
+    }
+  }
+
+  function handleDirectionsActivation() {
+    if (selectedPlace?.routeable) {
+      activateDirections();
+      navigate(directionsPath({ kind: "directions", toId: selectedPlace.id }));
+    }
+  }
+
+  function handleRouteResult(field: "start" | "end", place: SearchPlace) {
+    selectRouteResult(field, place);
+    navigate(directionsPath({
+      kind: "directions",
+      fromId: field === "start" ? place.id : routeDraft.start?.id,
+      toId: field === "end" ? place.id : routeDraft.end?.id,
+    }));
+  }
+
+  function handleRouteSwap() {
+    setRouteData(null);
+    setRouteError(null);
+    setRouteDraft((current) => ({ start: current.end, end: current.start }));
+    setRouteInputs((current) => ({ start: current.end, end: current.start }));
+    navigate(directionsPath({
+      kind: "directions",
+      fromId: routeDraft.end?.id,
+      toId: routeDraft.start?.id,
+    }));
+  }
+
+  function handleCloseDirections() {
+    resetDirections();
+    if (routeDraft.end) {
+      void navigateToPlaceId(routeDraft.end.id);
+      return;
+    }
+
+    navigate("/");
+  }
+
   function focusRouteStep(index: number) {
     const segment = routeSteps[index];
     if (!segment) {
@@ -43,6 +154,14 @@ export function MapExperience() {
     setFocusedSegmentId(segment.id);
     if (segment.floorId) {
       setSelectedFloorId(segment.floorId);
+    }
+
+    if (routeTarget.kind === "directions" && routeTarget.fromId && routeTarget.toId) {
+      window.history.pushState(
+        null,
+        "",
+        directionsPath({ ...routeTarget, step: index + 1, floorId: segment.floorId }),
+      );
     }
   }
 
@@ -55,8 +174,14 @@ export function MapExperience() {
         focusedSegmentId={focusedSegmentId}
         isFloorSelectorVisible={floorOptions.length > 0 && Boolean(currentFloorOption)}
         onAutoVisibleBuildingChange={setAutoVisibleBuildingId}
-        onSelectBuilding={selectBuildingFromMap}
-        onSelectVenue={selectVenueFromMap}
+        onSelectBuilding={(buildingId, name) => {
+          selectBuildingFromMap(buildingId, name);
+          navigate(viewPath({ kind: "view", buildingId }));
+        }}
+        onSelectVenue={(venue) => {
+          selectVenueFromMap(venue);
+          void navigateToPlaceId(venue.id);
+        }}
         placeDetail={placeDetail}
         routeData={effectiveRouteData}
         selectedFloorId={selectedFloorId}
@@ -88,7 +213,7 @@ export function MapExperience() {
                           <button
                             key={place.id}
                             type="button"
-                            onClick={() => selectPlace(place)}
+                            onClick={() => handlePlaceSelection(place)}
                             className={`flex w-full items-start justify-between gap-3 rounded-lg px-3 py-3 text-left transition ${
                               selectedPlace?.id === place.id
                                 ? "bg-sky-50"
@@ -117,7 +242,7 @@ export function MapExperience() {
                 <div className="flex items-stretch px-1 py-1">
                   <button
                     type="button"
-                    onClick={resetDirections}
+                    onClick={handleCloseDirections}
                     aria-label="Close directions"
                     title="Close directions"
                     className="mr-2 flex w-10 shrink-0 items-center justify-center rounded-lg text-slate-600 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
@@ -202,18 +327,7 @@ export function MapExperience() {
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setRouteData(null);
-                      setRouteError(null);
-                      setRouteDraft((current) => ({
-                        start: current.end,
-                        end: current.start,
-                      }));
-                      setRouteInputs((current) => ({
-                        start: current.end,
-                        end: current.start,
-                      }));
-                    }}
+                    onClick={handleRouteSwap}
                     aria-label="Swap start and destination"
                     title="Swap start and destination"
                     className="ml-2 flex w-10 shrink-0 items-center justify-center rounded-lg text-slate-600 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
@@ -232,7 +346,7 @@ export function MapExperience() {
                           <button
                             key={`${activeRouteField}-${place.id}`}
                             type="button"
-                            onClick={() => selectRouteResult(activeRouteField, place)}
+                            onClick={() => handleRouteResult(activeRouteField, place)}
                             className="flex w-full items-start justify-between gap-3 rounded-lg px-3 py-3 text-left hover:bg-slate-50"
                           >
                             <div>
@@ -282,7 +396,7 @@ export function MapExperience() {
                         <button
                           key={floor.id}
                           type="button"
-                          onClick={() => handleFloorSelect(floor.id)}
+                          onClick={() => handleFloorNavigation(floor.id)}
                           className={`rounded-md px-3 py-2 text-left text-sm font-semibold whitespace-nowrap ${
                             selectedFloorId === floor.id
                               ? "bg-slate-900 text-white"
@@ -303,7 +417,7 @@ export function MapExperience() {
                     aria-label="Go up one floor"
                     title="Go up one floor"
                     disabled={!higherFloorOption}
-                    onClick={() => higherFloorOption && handleFloorStep("up", higherFloorOption.id)}
+                    onClick={() => higherFloorOption && handleFloorNavigation(higherFloorOption.id, "up")}
                     className={`inline-flex h-10 w-10 items-center justify-center transition-colors duration-100 disabled:pointer-events-none disabled:opacity-45 ${
                       floorStepFeedback === "up" ? "bg-slate-200" : "bg-white"
                     }`}
@@ -316,7 +430,7 @@ export function MapExperience() {
                     aria-label="Go down one floor"
                     title="Go down one floor"
                     disabled={!lowerFloorOption}
-                    onClick={() => lowerFloorOption && handleFloorStep("down", lowerFloorOption.id)}
+                    onClick={() => lowerFloorOption && handleFloorNavigation(lowerFloorOption.id, "down")}
                     className={`inline-flex h-10 w-10 items-center justify-center transition-colors duration-100 disabled:pointer-events-none disabled:opacity-45 ${
                       floorStepFeedback === "down" ? "bg-slate-200" : "bg-white"
                     }`}
@@ -451,7 +565,7 @@ export function MapExperience() {
                   <div className="flex shrink-0 items-center gap-1">
                     <button
                       type="button"
-                      onClick={activateDirections}
+                      onClick={handleDirectionsActivation}
                       disabled={!selectedPlace.routeable}
                       aria-label="Directions"
                       title="Directions"
@@ -479,7 +593,9 @@ export function MapExperience() {
                 </div>
               </>
             ) : bootstrap ? (
-              <p className="text-sm text-slate-500">Search for a building, room, or venue.</p>
+              <p className={`text-sm ${searchError ? "text-rose-600" : "text-slate-500"}`}>
+                {searchError || "Search for a building, room, or venue."}
+              </p>
             ) : (
               <p className="text-sm text-slate-500">
                 {bootstrapError || "Loading campus navigator…"}
