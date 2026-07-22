@@ -1,8 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import type { RouteSegment } from "@/lib/pathadvisor";
-import { MdiIcon, formatDistance, formatDuration, placeLocationLabel, venueDisplayName } from "./map-experience/display";
+import { MdiIcon, MdiMaskIcon, formatDistance, formatDuration, placeLocationLabel, venueDisplayName } from "./map-experience/display";
+import { routeTransitionSummary } from "./map/routes";
 import { useMapExperienceState } from "./map-experience/use-map-experience-state";
 
 const CampusMap = dynamic(
@@ -24,11 +24,27 @@ export function MapExperience() {
   } = useMapExperienceState();
 
   const routeSteps = effectiveRouteData?.segments ?? [];
+  const focusedRouteStepIndex = routeSteps.findIndex((segment) => segment.id === focusedSegmentId);
+  const activeRouteStepIndex = focusedRouteStepIndex >= 0 ? focusedRouteStepIndex : 0;
+  const activeRouteStep = routeSteps[activeRouteStepIndex] ?? null;
+  const transitionSummary = effectiveRouteData ? routeTransitionSummary(effectiveRouteData.segments) : null;
   const resolvedFetchedCategory =
     fetchedPlaceCategory && fetchedPlaceCategory.placeId === placeDetail?.id
       ? fetchedPlaceCategory.category
       : undefined;
   const drawerCategory = selectedPlace?.category || resolvedFetchedCategory;
+
+  function focusRouteStep(index: number) {
+    const segment = routeSteps[index];
+    if (!segment) {
+      return;
+    }
+
+    setFocusedSegmentId(segment.id);
+    if (segment.floorId) {
+      setSelectedFloorId(segment.floorId);
+    }
+  }
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-slate-950">
@@ -320,70 +336,110 @@ export function MapExperience() {
               </div>
             ) : routeMode ? (
               <>
-                <h1 className="text-xl font-semibold text-slate-950">
-                  {effectiveRouteData?.startLabel || routeDraft.start?.name || "Choose a starting point"}
-                </h1>
-                <div className="mt-1 flex items-center gap-1.5 text-xl font-semibold text-slate-950">
-                  <MdiIcon name="arrow-right" className="h-5 w-5 shrink-0" />
-                  <h2>{effectiveRouteData?.endLabel || routeDraft.end?.name || "Choose a destination"}</h2>
+                <div className="min-w-0 text-base font-semibold text-slate-950">
+                  <h1 className="truncate">
+                    {effectiveRouteData?.startLabel || routeDraft.start?.name || "Choose a starting point"}
+                  </h1>
+                  <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                    <MdiIcon name="arrow-right" className="h-4 w-4 shrink-0" />
+                    <h2 className="truncate">{effectiveRouteData?.endLabel || routeDraft.end?.name || "Choose a destination"}</h2>
+                  </div>
                 </div>
-                <p className="mt-2 text-sm font-medium text-[#bd7b2c]">
+                <p className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs font-semibold text-[#bd7b2c]">
                   {effectiveRouteData
-                    ? `${formatDuration(effectiveRouteData.time)} • ${formatDistance(effectiveRouteData.distance)}`
+                    ? <>
+                        <span>{formatDuration(effectiveRouteData.time)} • {formatDistance(effectiveRouteData.distance)}</span>
+                        {transitionSummary?.lifts ? <>
+                          <span aria-hidden="true">•</span>
+                          <span className="inline-flex items-center gap-1" aria-label={`${transitionSummary.lifts} lift movements`}>
+                            <MdiMaskIcon name="elevator-passenger" className="h-3.5 w-3.5" />
+                            <span>{transitionSummary.lifts}</span>
+                          </span>
+                        </> : null}
+                        {transitionSummary?.staircaseFloors ? <>
+                          <span aria-hidden="true">•</span>
+                          <span className="inline-flex items-center gap-1" aria-label={`${transitionSummary.staircaseFloors} staircase floors`}>
+                            <MdiMaskIcon name="stairs" className="h-3.5 w-3.5" />
+                            <span>{transitionSummary.staircaseFloors} floors</span>
+                          </span>
+                        </> : null}
+                        {transitionSummary?.escalatorFloors ? <>
+                          <span aria-hidden="true">•</span>
+                          <span className="inline-flex items-center gap-1" aria-label={`${transitionSummary.escalatorFloors} escalator floors`}>
+                            <MdiMaskIcon name="escalator" className="h-3.5 w-3.5" />
+                            <span>{transitionSummary.escalatorFloors} floors</span>
+                          </span>
+                        </> : null}
+                      </>
                     : loadingDirections
                       ? "Calculating route…"
                       : "Select two venues to calculate the route"}
                 </p>
 
-                <div className="mt-4 max-h-[34vh] space-y-2 overflow-auto pr-1">
+                <div className="mt-3">
                   {routeDraft.start && routeDraft.end && routeDraft.start.id === routeDraft.end.id ? (
-                    <p className="text-sm text-rose-600">
+                    <p className="text-xs text-rose-600">
                       Start and destination need to be different.
                     </p>
                   ) : routeError ? (
-                    <p className="text-sm text-rose-600">{routeError}</p>
+                    <p className="text-xs text-rose-600">{routeError}</p>
                   ) : loadingDirections ? (
-                    <p className="text-sm text-slate-500">Calculating route…</p>
+                    <p className="text-xs text-slate-500">Calculating route…</p>
                   ) : !effectiveRouteData ? (
-                    <p className="text-sm text-slate-500">
+                    <p className="text-xs text-slate-500">
                       Select two routeable venues to display the full path, floor changes, and
                       step-by-step segments.
                     </p>
-                  ) : (
-                    routeSteps.map((segment: RouteSegment) => (
-                      <button
-                        key={segment.id}
-                        type="button"
-                        onClick={() => {
-                          setFocusedSegmentId(segment.id);
-                          if (segment.floorId) {
-                            setSelectedFloorId(segment.floorId);
-                          }
-                        }}
-                        className={`w-full rounded-lg border px-3 py-3 text-left ${
-                          focusedSegmentId === segment.id
-                            ? "border-sky-300 bg-sky-50"
-                            : "border-slate-200 bg-white"
-                        }`}
-                      >
-                        {segment.info ? (
-                          <p className="text-sm font-medium text-sky-700">{segment.info}</p>
-                        ) : (
-                          <>
-                            <p className="flex items-center gap-1 text-sm font-semibold text-slate-900">
-                              <span>{segment.start || "Start"}</span>
-                              {segment.end ? <MdiIcon name="arrow-right" className="h-4 w-4 shrink-0" /> : null}
-                              {segment.end ? <span>{segment.end}</span> : null}
+                  ) : activeRouteStep ? (
+                    <div>
+                      <div className="flex items-stretch gap-2" role="group" aria-label="Route segments">
+                        <button
+                          type="button"
+                          onClick={() => focusRouteStep(activeRouteStepIndex - 1)}
+                          disabled={activeRouteStepIndex === 0}
+                          aria-label="Previous route segment"
+                          title="Previous route segment"
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-35"
+                        >
+                          <MdiIcon name="arrow-left" className="h-4 w-4" />
+                        </button>
+
+                        <div className="min-w-0 flex-1 px-1 py-1">
+                          {activeRouteStep.info ? (
+                            <p className="line-clamp-2 text-sm leading-5 font-semibold text-sky-800">
+                              {activeRouteStep.info}
                             </p>
-                            <p className="mt-1 text-xs text-slate-500">{segment.locationLabel}</p>
-                            <p className="mt-2 text-xs text-slate-400">
-                              {formatDistance(segment.distance)} • {formatDuration(segment.time)}
+                          ) : (
+                            <p className="flex min-w-0 items-center gap-1 text-sm font-semibold text-sky-800">
+                              <span className="truncate">{activeRouteStep.start || "Start"}</span>
+                              {activeRouteStep.end ? <MdiIcon name="arrow-right" className="h-4 w-4 shrink-0" /> : null}
+                              {activeRouteStep.end ? <span className="truncate">{activeRouteStep.end}</span> : null}
                             </p>
-                          </>
-                        )}
-                      </button>
-                    ))
-                  )}
+                          )}
+                          <div className="mt-1 flex min-h-4 items-center gap-2 text-[11px] font-medium text-slate-500">
+                            {activeRouteStep.locationLabel ? <span className="min-w-0 flex-1 truncate">{activeRouteStep.locationLabel}</span> : null}
+                            <span className="ml-auto shrink-0">
+                              {formatDistance(activeRouteStep.distance)} • {formatDuration(activeRouteStep.time)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => focusRouteStep(activeRouteStepIndex + 1)}
+                          disabled={activeRouteStepIndex === routeSteps.length - 1}
+                          aria-label="Next route segment"
+                          title="Next route segment"
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-35"
+                        >
+                          <MdiIcon name="arrow-right" className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <p aria-live="polite" className="mt-1 text-center text-[11px] font-medium text-slate-500">
+                        {activeRouteStepIndex + 1}/{routeSteps.length}
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
               </>
             ) : selectedPlace && placeDetail ? (

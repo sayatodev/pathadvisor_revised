@@ -4,10 +4,21 @@ import { formatCampusAreaName } from "@/lib/venue-display";
 
 export type RouteDraft = { start: import("@/lib/pathadvisor").SearchPlace | null; end: import("@/lib/pathadvisor").SearchPlace | null };
 export type FloorOption = { id: string; label: string; elevation?: number | null };
-type MdiIconName = "arrow-left" | "arrow-right" | "arrow-top-right" | "chevron-down" | "clock-outline" | "crosshairs-gps" | "directions" | "home-outline" | "magnify" | "magnify-scan" | "map-marker-outline" | "swap-vertical";
+type MdiIconName = "arrow-left" | "arrow-right" | "arrow-top-right" | "chevron-down" | "clock-outline" | "crosshairs-gps" | "directions" | "elevator-passenger" | "escalator" | "home-outline" | "magnify" | "magnify-scan" | "map-marker-outline" | "stairs" | "swap-vertical";
 
 export function MdiIcon({ name, className = "" }: { name: MdiIconName; className?: string }) {
   return <Image src={`/mdi/${name}.svg`} alt="" width={20} height={20} className={className} />;
+}
+
+export function MdiMaskIcon({ name, className = "" }: { name: MdiIconName; className?: string }) {
+  const mask = `url("/mdi/${name}.svg") center / contain no-repeat`;
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-block shrink-0 bg-current ${className}`}
+      style={{ WebkitMask: mask, mask }}
+    />
+  );
 }
 
 export function formatDuration(minutes: number | null) {

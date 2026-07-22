@@ -6,4 +6,5 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 <!-- BEGIN:t3code-mcp-rules -->
 When using the browser preview MCP tools, always spin up a local production server instead of using development servers.
+Keep files below 500 lines by separating code of different realms into different files, unless you have a strong reason to make that specific file long.
 <!-- END:t3code-mcp-rules -->

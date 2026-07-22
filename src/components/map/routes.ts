@@ -41,9 +41,12 @@ function routeFloorLabel(segment: RouteData["segments"][number]) {
   return segment.locationLabel.match(/floor\s+([^,]+)/i)?.[1].trim() ?? "?";
 }
 
+type RouteTransitionKind = "lift" | "escalator" | "staircase";
+
 type RouteTransitionChip = {
   id: string;
   coordinates: [number, number];
+  kind: RouteTransitionKind;
   iconSrc?: string;
   liftLabel?: string;
   fromFloor: string;
@@ -81,40 +84,31 @@ function routeTransitionType(
       /(?:lift|elevator)\s*(?:no\.?|#)?\s*([a-z]*\d+[a-z]*)/i,
     )?.[1];
     return {
+      kind: "lift" as const,
       iconSrc: FACILITY_ICONS["Lift Shaft"],
       liftLabel: liftNumber ? `Lift ${liftNumber.toUpperCase()}` : "Lift",
     };
   }
 
   if (transitionDetails.includes("escalator") || hasEscalatorCode) {
-    return { iconSrc: FACILITY_ICONS.Escalator };
+    return { kind: "escalator" as const, iconSrc: FACILITY_ICONS.Escalator };
   }
 
   if (transitionDetails.includes("stair") || hasStairCode) {
-    return { iconSrc: FACILITY_ICONS.Staircase };
+    return { kind: "staircase" as const, iconSrc: FACILITY_ICONS.Staircase };
   }
 
   return null;
 }
 
-export function routeTransitionChips(segments: RouteData["segments"]): RouteTransitionChip[] {
-  return segments.flatMap((instructionSegment, index) => {
-    if (!instructionSegment.info) {
-      return [];
-    }
+function routeTransitions(segments: RouteData["segments"]): RouteTransitionChip[] {
+  const floorSegments = segments.flatMap((segment, index) =>
+    segment.floorId && segment.coordinates.length > 0 ? [{ segment, index }] : [],
+  );
 
-    const previousSegment = [...segments.slice(0, index)]
-      .reverse()
-      .find((segment) => Boolean(segment.floorId && segment.coordinates.length > 0));
-    const nextSegment = segments
-      .slice(index + 1)
-      .find((segment) => Boolean(segment.floorId && segment.coordinates.length > 0));
-
-    if (
-      !previousSegment ||
-      !nextSegment ||
-      previousSegment.floorId === nextSegment.floorId
-    ) {
+  return floorSegments.slice(1).flatMap(({ segment: nextSegment, index: nextIndex }, index) => {
+    const { segment: previousSegment, index: previousIndex } = floorSegments[index];
+    if (previousSegment.floorId === nextSegment.floorId) {
       return [];
     }
 
@@ -124,11 +118,12 @@ export function routeTransitionChips(segments: RouteData["segments"]): RouteTran
       return [];
     }
 
-    const transition = routeTransitionType(
-      previousSegment,
-      nextSegment,
-      instructionSegment.info,
-    );
+    const transitionInstruction = segments
+      .slice(previousIndex + 1, nextIndex)
+      .map((segment) => segment.info)
+      .filter((info): info is string => Boolean(info))
+      .join(" ");
+    const transition = routeTransitionType(previousSegment, nextSegment, transitionInstruction);
     if (!transition) {
       return [];
     }
@@ -140,6 +135,7 @@ export function routeTransitionChips(segments: RouteData["segments"]): RouteTran
       {
         id: `route-transition-${previousSegment.id}-${nextSegment.id}`,
         coordinates: [latitude, longitude] as [number, number],
+        kind: transition.kind,
         iconSrc: transition.iconSrc,
         liftLabel: transition.liftLabel,
         fromFloor: routeFloorLabel(previousSegment),
@@ -147,6 +143,57 @@ export function routeTransitionChips(segments: RouteData["segments"]): RouteTran
       },
     ];
   });
+}
+
+function routeFloorLevel(floor: string) {
+  const normalized = floor.trim().toUpperCase();
+  if (normalized === "G") {
+    return 0;
+  }
+
+  const basement = normalized.match(/^B(\d+)$/);
+  if (basement) {
+    return -Number.parseInt(basement[1], 10);
+  }
+
+  const lowerGround = normalized.match(/^LG(\d*)$/);
+  if (lowerGround) {
+    return -(Number.parseInt(lowerGround[1] || "1", 10));
+  }
+
+  const upperGround = normalized.match(/^UG(\d*)$/);
+  if (upperGround) {
+    return Number.parseInt(upperGround[1] || "1", 10);
+  }
+
+  const numeric = normalized.match(/^(?:L)?(\d+)$/);
+  return numeric ? Number.parseInt(numeric[1], 10) : null;
+}
+
+function routeTransitionFloorSpan(transition: RouteTransitionChip) {
+  const fromFloor = routeFloorLevel(transition.fromFloor);
+  const toFloor = routeFloorLevel(transition.toFloor);
+  return fromFloor === null || toFloor === null ? 1 : Math.max(Math.abs(toFloor - fromFloor), 1);
+}
+
+export function routeTransitionChips(segments: RouteData["segments"]): RouteTransitionChip[] {
+  return routeTransitions(segments);
+}
+
+export function routeTransitionSummary(segments: RouteData["segments"]) {
+  return routeTransitions(segments).reduce(
+    (summary, transition) => {
+      if (transition.kind === "lift") {
+        summary.lifts += 1;
+      } else if (transition.kind === "staircase") {
+        summary.staircaseFloors += routeTransitionFloorSpan(transition);
+      } else {
+        summary.escalatorFloors += routeTransitionFloorSpan(transition);
+      }
+      return summary;
+    },
+    { lifts: 0, staircaseFloors: 0, escalatorFloors: 0 },
+  );
 }
 
 export function createRouteTransitionChipElement(transition: RouteTransitionChip) {
@@ -227,18 +274,14 @@ export function createRouteTransitionChipElement(transition: RouteTransitionChip
   return marker;
 }
 
-export function routeCollection(routeData: RouteData | null, selectedFloorId: string | null) {
+export function routeCollection(routeData: RouteData | null, focusedSegmentId: string | null) {
   const segmentFeatures =
     routeData?.segments.flatMap((segment) => {
       if (segment.coordinates.length < 2) {
         return [];
       }
 
-      const isOutdoor = segment.locationLabel.toLowerCase().includes("outdoor");
-
-      // Only the selected indoor floor is the active route; all other context is dimmed.
-      const display =
-        !isOutdoor && segment.floorId === selectedFloorId ? "active" : "context";
+      const display = segment.id === focusedSegmentId ? "active" : "context";
 
       return [
         {

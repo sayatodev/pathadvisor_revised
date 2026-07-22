@@ -331,8 +331,8 @@ export function MapLibreMap(props: MapLibreMapProps) {
     [floorLayers, selectedLocationId, selectedPointOfInterestId],
   );
   const routesData = useMemo(
-    () => routeCollection(props.routeData, props.selectedFloorId),
-    [props.routeData, props.selectedFloorId],
+    () => routeCollection(props.routeData, props.focusedSegmentId),
+    [props.focusedSegmentId, props.routeData],
   );
 
   useEffect(() => {
