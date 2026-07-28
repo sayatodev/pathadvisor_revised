@@ -99,6 +99,17 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
       handleFloorSelect(floorId);
     }
 
+    if (routeMode) {
+      const selectedSegmentIndex = routeSteps.findIndex((segment) => segment.id === focusedSegmentId);
+      const segmentIndex = routeSteps[selectedSegmentIndex]?.floorId === floorId
+        ? selectedSegmentIndex
+        : routeSteps.findIndex((segment) => segment.floorId === floorId);
+      if (segmentIndex >= 0) {
+        focusRouteStep(segmentIndex);
+        return;
+      }
+    }
+
     if (routeTarget.kind === "directions" && routeTarget.fromId && routeTarget.toId) {
       window.history.pushState(null, "", directionsPath({ ...routeTarget, floorId }));
       return;
@@ -166,16 +177,18 @@ export function MapExperience({ target }: { target: MapRouteTarget }) {
       return;
     }
 
+    const selectedRouteFloorId =
+      segment.floorId ?? routeSteps.slice(0, index).reverse().find((entry) => entry.floorId)?.floorId;
     setFocusedSegmentId(segment.id);
-    if (segment.floorId) {
-      setSelectedFloorId(segment.floorId);
+    if (selectedRouteFloorId) {
+      setSelectedFloorId(selectedRouteFloorId);
     }
 
     if (routeTarget.kind === "directions" && routeTarget.fromId && routeTarget.toId) {
       window.history.pushState(
         null,
         "",
-        directionsPath({ ...routeTarget, step: index + 1, floorId: segment.floorId }),
+        directionsPath({ ...routeTarget, step: index + 1, floorId: selectedRouteFloorId }),
       );
     }
   }

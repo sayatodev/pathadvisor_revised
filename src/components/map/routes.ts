@@ -1,7 +1,8 @@
 import type { Map as MapLibreInstance } from "maplibre-gl";
-import type { RouteData } from "@/lib/pathadvisor";
+import type { FloorData, RouteData } from "@/lib/pathadvisor";
 import { FACILITY_ICONS, LAYER_IDS, ROUTE_CONNECTOR_DOT_SPACING_METERS, ROUTE_CONNECTOR_MIN_DISTANCE_METERS, SOURCE_IDS } from "./constants";
 import { distanceMeters } from "./geometry";
+import { nearbyLiftNumbers } from "./lifts";
 
 function routeConnectorDots(segments: RouteData["segments"]) {
   return segments.slice(1).flatMap((segment, index) => {
@@ -48,9 +49,10 @@ type RouteTransitionChip = {
   coordinates: [number, number];
   kind: RouteTransitionKind;
   iconSrc?: string;
-  liftLabel?: string;
+  liftNumbers?: string;
   fromFloor: string;
   toFloor: string;
+  relatedSegmentIds: string[];
 };
 
 function routeTransitionType(
@@ -86,7 +88,7 @@ function routeTransitionType(
     return {
       kind: "lift" as const,
       iconSrc: FACILITY_ICONS["Lift Shaft"],
-      liftLabel: liftNumber ? `Lift ${liftNumber.toUpperCase()}` : "Lift",
+      liftNumbers: liftNumber?.toUpperCase(),
     };
   }
 
@@ -101,7 +103,7 @@ function routeTransitionType(
   return null;
 }
 
-function routeTransitions(segments: RouteData["segments"]): RouteTransitionChip[] {
+function routeTransitions(segments: RouteData["segments"], floors: FloorData[] = []): RouteTransitionChip[] {
   const floorSegments = segments.flatMap((segment, index) =>
     segment.floorId && segment.coordinates.length > 0 ? [{ segment, index }] : [],
   );
@@ -137,9 +139,13 @@ function routeTransitions(segments: RouteData["segments"]): RouteTransitionChip[
         coordinates: [latitude, longitude] as [number, number],
         kind: transition.kind,
         iconSrc: transition.iconSrc,
-        liftLabel: transition.liftLabel,
+        liftNumbers:
+          transition.kind === "lift"
+            ? nearbyLiftNumbers(floors, [latitude, longitude]) ?? transition.liftNumbers
+            : undefined,
         fromFloor: routeFloorLabel(previousSegment),
         toFloor: routeFloorLabel(nextSegment),
+        relatedSegmentIds: segments.slice(previousIndex + 1, nextIndex).map((segment) => segment.id),
       },
     ];
   });
@@ -176,8 +182,8 @@ function routeTransitionFloorSpan(transition: RouteTransitionChip) {
   return fromFloor === null || toFloor === null ? 1 : Math.max(Math.abs(toFloor - fromFloor), 1);
 }
 
-export function routeTransitionChips(segments: RouteData["segments"]): RouteTransitionChip[] {
-  return routeTransitions(segments);
+export function routeTransitionChips(segments: RouteData["segments"], floors?: FloorData[]): RouteTransitionChip[] {
+  return routeTransitions(segments, floors);
 }
 
 export function routeTransitionSummary(segments: RouteData["segments"]) {
@@ -196,16 +202,16 @@ export function routeTransitionSummary(segments: RouteData["segments"]) {
   );
 }
 
-export function createRouteTransitionChipElement(transition: RouteTransitionChip) {
+export function createRouteTransitionChipElement(transition: RouteTransitionChip, isActive: boolean) {
   const marker = document.createElement("div");
   marker.className = "pathadvisor-route-transition-marker";
 
   const element = document.createElement("div");
-  element.className = "pathadvisor-route-transition-chip";
+  element.className = `pathadvisor-route-transition-chip${isActive ? " pathadvisor-route-transition-chip--active" : ""}`;
   element.title = `Floor ${transition.fromFloor} to Floor ${transition.toFloor}`;
   Object.assign(element.style, {
     alignItems: "center",
-    backgroundColor: "#3d5181",
+    backgroundColor: isActive ? "#2d9aed" : "#3d5181",
     border: "1px solid rgba(255, 255, 255, 0.32)",
     borderRadius: "6px",
     boxShadow: "0 4px 10px rgba(15, 23, 42, 0.28)",
@@ -237,22 +243,39 @@ export function createRouteTransitionChipElement(transition: RouteTransitionChip
     });
     element.append(icon);
 
-    const divider = document.createElement("span");
+    const divider = document.createElement("div");
     divider.className = "pathadvisor-route-transition-chip__divider";
-    divider.textContent = "|";
+    Object.assign(divider.style, {
+      backgroundColor: "rgba(203, 213, 225, 0.72)",
+      flex: "0 0 1px",
+      height: "16px",
+      width: "1px",
+    });
     element.append(divider);
   }
 
-  if (transition.liftLabel) {
-    const liftLabel = document.createElement("span");
-    liftLabel.className = "pathadvisor-route-transition-chip__lift";
-    liftLabel.textContent = `${transition.liftLabel} ·`;
-    element.append(liftLabel);
+  if (transition.liftNumbers) {
+    const liftNumbers = document.createElement("span");
+    liftNumbers.className = "pathadvisor-route-transition-chip__lift-numbers";
+    liftNumbers.textContent = transition.liftNumbers;
+    Object.assign(liftNumbers.style, {
+      backgroundColor: "#64748b",
+      borderRadius: "4px",
+      padding: "3px 5px",
+    });
+    element.append(liftNumbers);
   }
+
+  const floorAndArrow = document.createElement("span");
+  Object.assign(floorAndArrow.style, {
+    alignItems: "center",
+    display: "flex",
+    gap: "0",
+  });
 
   const floorChange = document.createElement("span");
   floorChange.textContent = transition.fromFloor;
-  element.append(floorChange);
+  floorAndArrow.append(floorChange);
 
   const arrow = document.createElement("img");
   arrow.className = "pathadvisor-route-transition-chip__arrow";
@@ -264,7 +287,8 @@ export function createRouteTransitionChipElement(transition: RouteTransitionChip
     transform: "rotate(-90deg)",
     width: "13px",
   });
-  element.append(arrow);
+  floorAndArrow.append(arrow);
+  element.append(floorAndArrow);
 
   const toFloor = document.createElement("span");
   toFloor.textContent = transition.toFloor;

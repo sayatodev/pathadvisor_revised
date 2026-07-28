@@ -9,6 +9,7 @@ import {
   isPathwayLikeFeature,
   normalizeColorHex,
 } from "./geometry";
+import { compressLiftNumbers } from "./lifts";
 
 export function floorCollection(
   floors: FloorData[],
@@ -20,8 +21,9 @@ export function floorCollection(
     features: floors.flatMap((floor) =>
       floor.features.map((feature) => {
         const isCourtyard = isCourtyardFeature(feature.properties);
+        const isCanteen = feature.properties.typeName.toLowerCase().includes("canteen");
         const fillColor = normalizeColorHex(
-          isCourtyard ? "#a8e6b6" : feature.properties.colorHex,
+          isCourtyard ? "#a8e6b6" : isCanteen ? "#dfc6fc" : feature.properties.colorHex,
           isPathwayLikeFeature(feature.properties) ? "#ffffff" : "#d1d5db",
         );
         const isSelected =
@@ -84,41 +86,6 @@ export function facilityCollection(floors: FloorData[]) {
   };
 }
 
-function compressLiftNumbers(labels: string[]) {
-  const numbers = Array.from(
-    new Set(
-      labels
-        .map((label) => {
-          const match = label.match(/(\d+)/);
-          return match ? Number.parseInt(match[1], 10) : null;
-        })
-        .filter((value): value is number => value !== null),
-    ),
-  ).sort((left, right) => left - right);
-
-  if (numbers.length === 0) {
-    return "Lift";
-  }
-
-  const ranges: string[] = [];
-  let rangeStart = numbers[0];
-  let previous = numbers[0];
-
-  for (const current of numbers.slice(1)) {
-    if (current === previous + 1) {
-      previous = current;
-      continue;
-    }
-
-    ranges.push(rangeStart === previous ? `${rangeStart}` : `${rangeStart}-${previous}`);
-    rangeStart = current;
-    previous = current;
-  }
-
-  ranges.push(rangeStart === previous ? `${rangeStart}` : `${rangeStart}-${previous}`);
-  return `Lift ${ranges.join(",")}`;
-}
-
 export function liftCollection(floors: FloorData[]) {
   const groups: Array<{ center: [number, number]; names: string[] }> = [];
 
@@ -151,7 +118,7 @@ export function liftCollection(floors: FloorData[]) {
       },
       properties: {
         icon: "facility-Lift Shaft",
-        label: compressLiftNumbers(group.names),
+        label: `Lift ${compressLiftNumbers(group.names) ?? ""}`.trim(),
       },
     })),
   };

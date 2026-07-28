@@ -352,9 +352,14 @@ export function useMapRouteTargetHydration({
 
     const frame = window.requestAnimationFrame(() => {
       setFocusedSegmentId(segment.id);
-      const selectedRouteFloor = target.floorId && routeData.segments.some((entry) => entry.floorId === target.floorId)
-        ? target.floorId
-        : segment.floorId ?? routeData.startFloorId ?? null;
+      const transitionStartFloorId = segment.floorId
+        ? undefined
+        : routeData.segments.slice(0, routeStepIndex).reverse().find((entry) => entry.floorId)?.floorId;
+      const selectedRouteFloor = segment.floorId
+        ? target.floorId && routeData.segments.some((entry) => entry.floorId === target.floorId)
+          ? target.floorId
+          : segment.floorId
+        : transitionStartFloorId ?? routeData.startFloorId ?? null;
       setSelectedFloorId(selectedRouteFloor);
     });
 

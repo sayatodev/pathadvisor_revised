@@ -251,13 +251,15 @@ export function useMapExperienceState(target: MapRouteTarget, onInvalidTarget: (
       return;
     }
 
-    getFloorData(selectedFloorId)
-      .then((data) => {
-        setFloorData(data);
-      })
-      .catch(() => {
-        setFloorData(null);
-      });
+    let cancelled = false;
+    void getFloorData(selectedFloorId).then(
+      (data) => !cancelled && setFloorData(data),
+      () => !cancelled && setFloorData(null),
+    );
+
+    return () => {
+      cancelled = true;
+    };
   }, [selectedFloorId]);
 
   useEffect(

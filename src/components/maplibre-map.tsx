@@ -60,8 +60,8 @@ export function MapLibreMap(props: MapLibreMapProps) {
       ? props.selectedPlace.id
         : props.selectedPlace?.buildingId ?? props.placeDetail?.buildingId ?? null;
   const transitionChips = useMemo(
-    () => (props.routeData ? routeTransitionChips(props.routeData.segments) : []),
-    [props.routeData],
+    () => (props.routeData ? routeTransitionChips(props.routeData.segments, props.floorData ? [props.floorData] : []) : []),
+    [props.floorData, props.routeData],
   );
 
   const buildingBounds = useMemo(
@@ -220,7 +220,10 @@ export function MapLibreMap(props: MapLibreMapProps) {
     routeTransitionMarkerRef.current.forEach((marker) => marker.remove());
     const markers = transitionChips.map((transition) =>
       new maplibregl.Marker({
-        element: createRouteTransitionChipElement(transition),
+        element: createRouteTransitionChipElement(
+          transition,
+          transition.relatedSegmentIds.includes(props.focusedSegmentId ?? ""),
+        ),
         anchor: "center",
       })
         .setLngLat([transition.coordinates[1], transition.coordinates[0]])
@@ -248,7 +251,7 @@ export function MapLibreMap(props: MapLibreMapProps) {
         routeTransitionMarkerRef.current = [];
       }
     };
-  }, [mapReady, transitionChips]);
+  }, [mapReady, props.focusedSegmentId, transitionChips]);
 
   useEffect(() => {
     if (zoomLevel < AUTO_FLOOR_MIN_ZOOM) {
